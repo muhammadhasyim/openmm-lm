@@ -39,7 +39,7 @@ def create_water_cavity_system():
     return topology, positions
 
 
-def test_uma_hybrid_rpmd_cavity():
+def test_uma_hybrid_rpmd_cavity(extended_rpmd_api):
     """Test UMA + hybrid RPMD with cavity particle."""
     print("=" * 70)
     print("Test: UMA + Hybrid RPMD + Cavity Particle Integration")

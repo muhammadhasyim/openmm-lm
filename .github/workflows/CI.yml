@@ -186,6 +186,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: "Verify SWIG OpenMM.i includes resolve"
+        run: python3 devtools/check_swig_includes.py
+
+      - name: "Verify swigInputConfig RPMDIntegrator UNITS match header"
+        run: python3 devtools/check_swig_units_rpmd_integrator.py
+
       - uses: conda-incubator/setup-miniconda@v3
         name: "Prepare base dependencies"
         with:
@@ -344,6 +350,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: "Verify SWIG OpenMM.i includes resolve"
+        run: python devtools/check_swig_includes.py
+
+      - name: "Verify swigInputConfig RPMDIntegrator UNITS match header"
+        run: python devtools/check_swig_units_rpmd_integrator.py
+
       - uses: conda-incubator/setup-miniconda@v2
         name: "Prepare base dependencies"
         with:
@@ -468,6 +480,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
+      - name: "Verify SWIG wrapper config consistency"
+        run: |
+          python3 devtools/check_swig_includes.py
+          python3 devtools/check_swig_units_rpmd_integrator.py
 
       - uses: conda-incubator/setup-miniconda@v2
         name: "Prepare base dependencies"

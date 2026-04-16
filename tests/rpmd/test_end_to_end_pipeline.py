@@ -21,7 +21,7 @@ import numpy as np
 import openmm
 from openmm import app, unit
 
-def test_full_pipeline():
+def test_full_pipeline(extended_rpmd_api):
     """Run complete UMA/RPMD pipeline."""
     print("=" * 70)
     print("End-to-End UMA/RPMD Pipeline Test")

@@ -72,7 +72,7 @@ def _create_stretched_water():
     return topology, positions
 
 
-def test_batched_rpmd_forces_drive_dynamics():
+def test_batched_rpmd_forces_drive_dynamics(extended_rpmd_api):
     """Batched PythonForce must produce position changes consistent with
     single-copy force magnitudes (not ~zero from wrong scaling)."""
     try:

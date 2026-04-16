@@ -85,7 +85,7 @@ def create_small_dimer_system(num_molecules=5, box_size_nm=1.5):
     return system, positions
 
 
-def test_hybrid_rpmd_cavity():
+def test_hybrid_rpmd_cavity(extended_rpmd_api):
     """Test that cavity particle is treated classically in hybrid RPMD."""
     print("=" * 60)
     print("Test: Hybrid RPMD with Classical Cavity Particle")

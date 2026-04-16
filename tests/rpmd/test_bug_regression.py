@@ -146,7 +146,7 @@ def test_force_overwrite_regression():
         return False
 
 
-def test_classical_centroid_regression():
+def test_classical_centroid_regression(extended_rpmd_api):
     """
     Regression test for Bug #2: Classical particle only sees bead 0 force.
     

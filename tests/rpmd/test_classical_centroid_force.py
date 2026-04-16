@@ -69,7 +69,7 @@ def create_hybrid_test_system():
     return system, positions
 
 
-def test_classical_centroid_force():
+def test_classical_centroid_force(extended_rpmd_api):
     """Test that classical particle sees centroid-averaged force."""
     print("=" * 70)
     print("Test: Classical Particle Centroid Force in Hybrid RPMD")

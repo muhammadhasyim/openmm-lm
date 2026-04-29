@@ -17,6 +17,74 @@
 #define ENVELOPE_EXPONENTIAL 3
 
 /**
+ * Coupling modulation types (must match CavityForce::CouplingModulationType)
+ */
+#define MODULATION_NONE 0
+#define MODULATION_STEP 1
+#define MODULATION_SQUARE_WAVE 2
+#define MODULATION_DECAYING_STEP 3
+#define MODULATION_ADAPTIVE_SQUARE_WAVE 4
+
+/**
+ * Evaluate coupling modulation entirely on the GPU.
+ *
+ * Given the current time and modulation parameters, returns the effective
+ * lambdaCoupling value.  This eliminates the Python->C++ round-trip that
+ * was needed when modulation was driven from the host.
+ *
+ * @param time_ps         current simulation time in picoseconds
+ * @param baseLambda      constant lambda value (used when modType == MODULATION_NONE)
+ * @param modType         modulation type (MODULATION_NONE/STEP/SQUARE_WAVE/DECAYING_STEP)
+ * @param modAmplitude    lambda when coupling is "on"
+ * @param modPeriodPs     square-wave period in ps
+ * @param modDutyCycle    fraction of period that is "on" [0,1]
+ * @param modStartTimePs  time at which modulation activates
+ * @param modStopTimePs   time at which modulation deactivates (-1 = never)
+ * @param modDecayTauPs   exponential decay time constant (decaying-step only)
+ * @return effective lambdaCoupling for this timestep
+ */
+DEVICE float evaluateModulation(float time_ps, float baseLambda,
+                                int modType, float modAmplitude,
+                                float modPeriodPs, float modDutyCycle,
+                                float modStartTimePs, float modStopTimePs,
+                                float modDecayTauPs,
+                                GLOBAL const float* RESTRICT adaptiveState) {
+    if (modType == MODULATION_NONE)
+        return baseLambda;
+
+    // Before start or after stop: coupling is off
+    if (time_ps < modStartTimePs)
+        return 0.0f;
+    if (modStopTimePs >= 0.0f && time_ps >= modStopTimePs)
+        return 0.0f;
+
+    float dt = time_ps - modStartTimePs;
+
+    if (modType == MODULATION_STEP) {
+        return modAmplitude;
+    }
+
+    if (modType == MODULATION_SQUARE_WAVE) {
+        float phase = dt / modPeriodPs;
+        phase = phase - floorf(phase);
+        return (phase < modDutyCycle) ? modAmplitude : 0.0f;
+    }
+
+    if (modType == MODULATION_DECAYING_STEP) {
+        return modAmplitude * expf(-dt / modDecayTauPs);
+    }
+
+    if (modType == MODULATION_ADAPTIVE_SQUARE_WAVE) {
+        float currentAmp = adaptiveState[0];
+        float phase = dt / modPeriodPs;
+        phase = phase - floorf(phase);
+        return (phase < modDutyCycle) ? currentAmp : 0.0f;
+    }
+
+    return baseLambda;
+}
+
+/**
  * Compute envelope function s(t)
  * 
  * @param time_ps        time in picoseconds
@@ -123,6 +191,57 @@ KERNEL void clearDipoleBuffer(GLOBAL float* RESTRICT dipole) {
 }
 
 /**
+ * Update the adaptive square-wave amplitude on the GPU.
+ *
+ * Runs as a single thread before computeCavityForces.  Checks whether a new
+ * square-wave period has started; if so, recomputes the amplitude from the
+ * current bath temperature (passed as a scalar arg from the host context
+ * parameter "BussiTemperature"):
+ *
+ *   g_next = g_target * sqrt(T_target / max(T_bath, 1))
+ *
+ * The state buffer persists across kernel launches:
+ *   adaptiveState[0] = currentAmplitude
+ *   adaptiveState[1] = lastUpdatedPeriod  (as float)
+ */
+KERNEL void updateAdaptiveAmplitude(
+        GLOBAL float* RESTRICT adaptiveState,
+        float time_ps,
+        float modPeriodPs,
+        float modStartTimePs,
+        float modStopTimePs,
+        float targetCoupling,
+        float targetTemperatureK,
+        float bathTemperatureK,
+        float minAmplitude,
+        float maxAmplitude) {
+    if (GLOBAL_ID != 0)
+        return;
+
+    if (time_ps < modStartTimePs) {
+        adaptiveState[0] = targetCoupling;
+        return;
+    }
+    if (modStopTimePs >= 0.0f && time_ps >= modStopTimePs) {
+        adaptiveState[0] = 0.0f;
+        return;
+    }
+
+    float dt = time_ps - modStartTimePs;
+    int currentPeriod = (int)(dt / modPeriodPs);
+    int lastUpdatedPeriod = (int)adaptiveState[1];
+
+    if (currentPeriod > lastUpdatedPeriod) {
+        float T_bath = fmaxf(bathTemperatureK, 1.0f);
+        float ratio = targetTemperatureK / T_bath;
+        float newAmp = targetCoupling * sqrtf(ratio);
+        newAmp = fmaxf(minAmplitude, fminf(maxAmplitude, newAmp));
+        adaptiveState[0] = newAmp;
+        adaptiveState[1] = (float)currentPeriod;
+    }
+}
+
+/**
  * Compute the molecular dipole moment (excluding cavity particle).
  * Uses UNWRAPPED positions (posq corrected by posCellOffsets) so that the
  * dipole is continuous across periodic boundaries -- matching cav-hoomd.
@@ -204,18 +323,28 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
         float omegac, float lambdaCoupling, float photonMass, int paddedNumAtoms,
         float time_ps,
         float f0, float omega_d, float phase_d, int envelope_type_d, float env_param1_d, float env_param2_d, int cavityDriveEnabled,
-        float E0, float omega_L, float phase_L, int envelope_type_L, float env_param1_L, float env_param2_L, int directLaserEnabled) {
-    
+        float E0, float omega_L, float phase_L, int envelope_type_L, float env_param1_L, float env_param2_L, int directLaserEnabled,
+        int modType, float modAmplitude, float modPeriodPs, float modDutyCycle,
+        float modStartTimePs, float modStopTimePs, float modDecayTauPs,
+        GLOBAL const float* RESTRICT adaptiveState) {
+
     // Unit conversion constants (NIST 2018 CODATA, matching Reference platform)
     const float HARTREE_TO_KJMOL = 2625.4996f;
     const float BOHR_TO_NM = 0.052917721f;
     const float AMU_TO_AU = 1822.8885f;
     const float CONVERSION_FACTOR = HARTREE_TO_KJMOL / (BOHR_TO_NM * BOHR_TO_NM);
-    
+
+    // GPU-side coupling modulation: evaluate lambda from time without host round-trip
+    float effectiveLambda = evaluateModulation(time_ps, lambdaCoupling,
+                                                modType, modAmplitude,
+                                                modPeriodPs, modDutyCycle,
+                                                modStartTimePs, modStopTimePs,
+                                                modDecayTauPs, adaptiveState);
+
     // Read dipole from global memory (should be called after computeCavityDipole)
     float dipoleX = dipole[0];
     float dipoleY = dipole[1];
-    
+
     // Read wrapped cavity position and unwrap using posCellOffsets
     real4 posWrapped = posq[reorderedCavityIndex];
     int4 offset = posCellOffsets[reorderedCavityIndex];
@@ -223,18 +352,16 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
     qPhoton.x = posWrapped.x - offset.x * periodicBoxVecX.x - offset.y * periodicBoxVecY.x - offset.z * periodicBoxVecZ.x;
     qPhoton.y = posWrapped.y - offset.x * periodicBoxVecX.y - offset.y * periodicBoxVecY.y - offset.z * periodicBoxVecZ.y;
     qPhoton.z = posWrapped.z - offset.x * periodicBoxVecX.z - offset.y * periodicBoxVecY.z - offset.z * periodicBoxVecZ.z;
-    
+
     // Compute constants with proper unit conversion
     // CRITICAL: photonMass is in amu, but omegac is in atomic units (Hartree)
     // We must convert photonMass to atomic units (electron masses) for consistency
     float photonMass_au = photonMass * AMU_TO_AU;
     // K [kJ/(mol·nm²)] = photonMass [a.u.] * omegac² [a.u.²] * CONVERSION_FACTOR
     float K = photonMass_au * omegac * omegac * CONVERSION_FACTOR;
-    
-    // epsilon needs units such that epsilon * d gives FORCE (kJ/(mol·nm))
-    // d has units [e·nm], so epsilon needs [kJ/(mol·nm²·e)]
-    // epsilon [kJ/(mol·nm²·e)] = lambdaCoupling [dimensionless] * omegac [a.u.] * (HARTREE_TO_KJMOL / BOHR_TO_NM²)
-    float epsilon = lambdaCoupling * omegac * CONVERSION_FACTOR;
+
+    // epsilon uses the GPU-evaluated effective lambda (not the host-side scalar)
+    float epsilon = effectiveLambda * omegac * CONVERSION_FACTOR;
     
     // Compute displaced cavity position: Dq = q + (epsilon/K) * d
     // This ensures proper unit conversion: epsilon/K has units [1/e]

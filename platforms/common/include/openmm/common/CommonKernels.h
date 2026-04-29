@@ -1407,6 +1407,7 @@ public:
      * Update the posCellOffsets buffer when atoms are reordered.
      */
     void updatePosCellOffsets();
+    void updateCachedCavityIndex();
 private:
     class ReorderListener;
     ComputeContext& cc;
@@ -1443,6 +1444,23 @@ private:
     int directLaserEnvelopeType;
     double directLaserEnvParam1;
     double directLaserEnvParam2;
+    // GPU-side coupling modulation
+    int modulationType;
+    double modAmplitude;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    double modDecayTauPs;
+    // Adaptive square-wave state
+    double modTargetTemperatureK;
+    double modMinAmplitude;
+    double modMaxAmplitude;
+    ComputeArray adaptiveStateBuffer;
+    ComputeKernel updateAdaptiveKernel;
+    // Cached per-reorder state (avoid recomputing every step)
+    int cachedReorderedCavityIndex;
+    bool staticArgsSet;
 };
 
 /**
@@ -1512,6 +1530,19 @@ private:
     double harmonicEnergy;
     double couplingEnergy;
     double dipoleSelfEnergy;
+    // Per-mode adaptive square-wave modulation
+    bool modEnabled;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    std::vector<double> modeGTargets;
+    std::vector<double> modeTTargets;
+    std::vector<double> modeMinAmps;
+    std::vector<double> modeMaxAmps;
+    ComputeArray modeModParamsBuffer;       // float4 per mode: (g_target, T_target, minAmp, maxAmp)
+    ComputeArray modeAdaptiveStateBuffer;   // float2 per mode: (currentAmplitude, lastUpdatedPeriod)
+    ComputeKernel updateAdaptiveKernel;
 };
 
 /**

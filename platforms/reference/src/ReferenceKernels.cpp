@@ -3515,7 +3515,22 @@ void ReferenceCalcCavityForceKernel::initialize(const System& system, const Cavi
     directLaserEnvelopeType = force.getDirectLaserEnvelopeType();
     directLaserEnvParam1 = force.getDirectLaserEnvelopeParam1();
     directLaserEnvParam2 = force.getDirectLaserEnvelopeParam2();
-    
+
+    // GPU-side coupling modulation
+    modulationType = (int) force.getCouplingModulationType();
+    modAmplitude = force.getModulationAmplitude();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modDecayTauPs = force.getModulationDecayTauPs();
+    modTargetTemperatureK = force.getModulationTargetTemperatureK();
+    modMinAmplitude = force.getModulationMinAmplitude();
+    modMaxAmplitude = force.getModulationMaxAmplitude();
+    adaptiveAmplitude = modAmplitude;
+    lastAdaptivePeriod = -1;
+    lastBathTemperatureK = 300.0;
+
     // Store charges for all particles
     int numParticles = system.getNumParticles();
     charges.resize(numParticles, 0.0);
@@ -3547,7 +3562,18 @@ double ReferenceCalcCavityForceKernel::execute(ContextImpl& context, bool includ
                 break;
         }
     }
-    
+
+    // Apply GPU-side modulation (overrides schedule when active)
+    if (modulationType != 0) {
+        if (modulationType == 4) {
+            try {
+                lastBathTemperatureK = context.getParameter(BussiThermostat::Temperature());
+            } catch (...) {}
+        }
+        double time_ps_now = context.getTime();
+        currentLambda = evaluateModulation(time_ps_now);
+    }
+
     vector<Vec3>& posData = extractPositions(context);
     vector<Vec3>& forceData = extractForces(context);
     Vec3* boxVectors = extractBoxVectors(context);
@@ -3672,6 +3698,59 @@ void ReferenceCalcCavityForceKernel::copyParametersToContext(ContextImpl& contex
     directLaserEnvelopeType = force.getDirectLaserEnvelopeType();
     directLaserEnvParam1 = force.getDirectLaserEnvelopeParam1();
     directLaserEnvParam2 = force.getDirectLaserEnvelopeParam2();
+    // GPU-side coupling modulation
+    modulationType = (int) force.getCouplingModulationType();
+    modAmplitude = force.getModulationAmplitude();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modDecayTauPs = force.getModulationDecayTauPs();
+    modTargetTemperatureK = force.getModulationTargetTemperatureK();
+    modMinAmplitude = force.getModulationMinAmplitude();
+    modMaxAmplitude = force.getModulationMaxAmplitude();
+    adaptiveAmplitude = modAmplitude;
+    lastAdaptivePeriod = -1;
+}
+
+double ReferenceCalcCavityForceKernel::evaluateModulation(double time_ps) {
+    if (modulationType == 0)
+        return lambdaCoupling;
+    if (time_ps < modStartTimePs)
+        return 0.0;
+    if (modStopTimePs >= 0.0 && time_ps >= modStopTimePs)
+        return 0.0;
+
+    double dt = time_ps - modStartTimePs;
+
+    if (modulationType == 1)  // Step
+        return modAmplitude;
+
+    if (modulationType == 2) {  // SquareWave
+        double phase = dt / modPeriodPs;
+        phase = phase - std::floor(phase);
+        return (phase < modDutyCycle) ? modAmplitude : 0.0;
+    }
+
+    if (modulationType == 3)  // DecayingStep
+        return modAmplitude * std::exp(-dt / modDecayTauPs);
+
+    if (modulationType == 4) {  // AdaptiveSquareWave
+        int currentPeriod = (int)(dt / modPeriodPs);
+        if (currentPeriod > lastAdaptivePeriod) {
+            double T_bath = std::max(lastBathTemperatureK, 1.0);
+            double ratio = modTargetTemperatureK / T_bath;
+            double newAmp = modAmplitude * std::sqrt(ratio);
+            newAmp = std::max(modMinAmplitude, std::min(modMaxAmplitude, newAmp));
+            adaptiveAmplitude = newAmp;
+            lastAdaptivePeriod = currentPeriod;
+        }
+        double phase = dt / modPeriodPs;
+        phase = phase - std::floor(phase);
+        return (phase < modDutyCycle) ? adaptiveAmplitude : 0.0;
+    }
+
+    return lambdaCoupling;
 }
 
 // Helper functions for laser field computation
@@ -3812,6 +3891,26 @@ void ReferenceCalcMultiModeCavityForceKernel::initialize(const System& system, c
         dsePrefactor += lambda1 * lambda1 * fn * fn;
     }
     dsePrefactor *= 0.5 * convFactor;
+
+    // Per-mode adaptive modulation
+    modEnabled = force.isModulationEnabled();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modeGTargets.resize(numModes);
+    modeTTargets.resize(numModes);
+    modeMinAmps.resize(numModes);
+    modeMaxAmps.resize(numModes);
+    adaptiveAmplitudes.resize(numModes);
+    for (int i = 0; i < numModes; i++) {
+        modeGTargets[i] = force.getModeGTarget(i);
+        modeTTargets[i] = force.getModeTTargetK(i);
+        modeMinAmps[i] = force.getModeMinAmplitude(i);
+        modeMaxAmps[i] = force.getModeMaxAmplitude(i);
+        adaptiveAmplitudes[i] = modeGTargets[i];
+    }
+    lastAdaptivePeriod = -1;
 }
 
 double ReferenceCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
@@ -3836,44 +3935,72 @@ double ReferenceCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bo
         }
     }
     
+    // Per-mode adaptive modulation: determine effective lambda per mode
+    double photonMass_au_exec = photonMass * AMU_TO_AU_CAVITY;
+    double squareWaveOn = 0.0;
+    if (modEnabled) {
+        double time_ps_now = context.getTime();
+        double bathTempK = 300.0;
+        try {
+            bathTempK = context.getParameter(BussiThermostat::Temperature());
+        } catch (...) {}
+
+        if (time_ps_now >= modStartTimePs && (modStopTimePs < 0.0 || time_ps_now < modStopTimePs)) {
+            double dt = time_ps_now - modStartTimePs;
+            int currentPeriod = (int)(dt / modPeriodPs);
+            if (currentPeriod > lastAdaptivePeriod) {
+                for (int m = 0; m < numModes; m++) {
+                    double T_bath = std::max(bathTempK, 1.0);
+                    double ratio = modeTTargets[m] / T_bath;
+                    double newAmp = modeGTargets[m] * std::sqrt(ratio);
+                    newAmp = std::max(modeMinAmps[m], std::min(modeMaxAmps[m], newAmp));
+                    adaptiveAmplitudes[m] = newAmp;
+                }
+                lastAdaptivePeriod = currentPeriod;
+            }
+            double phase = dt / modPeriodPs;
+            phase = phase - std::floor(phase);
+            squareWaveOn = (phase < modDutyCycle) ? 1.0 : 0.0;
+        }
+    }
+
     // Compute energy components and per-mode quantities
     harmonicEnergy = 0.0;
     couplingEnergy = 0.0;
-    
+    double dynamicDSEPrefactor = 0.0;
+
     for (int m = 0; m < numModes; m++) {
         int n = m + 1;
         double omega_n = n * omega1;
-        double lambda_n = lambda1;
+        double lambda_n;
+        if (modEnabled) {
+            lambda_n = squareWaveOn * adaptiveAmplitudes[m];
+        } else {
+            lambda_n = lambda1;
+        }
         double fn = spatialProfiles[m];
-        
-        // Unit conversions (same as single-mode, using NIST constants)
-        double photonMass_au_exec = photonMass * AMU_TO_AU_CAVITY;
+
         double K_n = photonMass_au_exec * omega_n * omega_n * CONVERSION_FACTOR_CAVITY;
         double eps_n = lambda_n * omega_n * CONVERSION_FACTOR_CAVITY;
         double epsf_n = eps_n * fn;
-        
+
+        if (K_n > 0.0)
+            dynamicDSEPrefactor += eps_n * eps_n / K_n * fn * fn;
+
         Vec3 qPhoton = posData[cavityParticleIndices[m]];
-        
-        // Harmonic energy: (1/2) * K_n * q_n^2
+
         harmonicEnergy += 0.5 * K_n * (qPhoton[0]*qPhoton[0] + qPhoton[1]*qPhoton[1] + qPhoton[2]*qPhoton[2]);
-        
-        // Coupling energy: eps_n * f_n * q_n . d (x,y only)
         couplingEnergy += epsf_n * (qPhoton[0]*dipole[0] + qPhoton[1]*dipole[1]);
-        
+
         if (includeForces) {
-            // Displaced cavity position: Dq_n = q_n + (eps_n*f_n/K_n) * d
-            double epsfOverK_n = epsf_n / K_n;
+            double epsfOverK_n = (K_n > 0.0) ? (epsf_n / K_n) : 0.0;
             double DqX = qPhoton[0] + epsfOverK_n * dipole[0];
             double DqY = qPhoton[1] + epsfOverK_n * dipole[1];
-            
-            // Force on molecular particles from this mode
+
             for (int i = 0; i < numParticles; i++) {
                 bool isCavity = false;
                 for (int mm = 0; mm < numModes; mm++) {
-                    if (i == cavityParticleIndices[mm]) {
-                        isCavity = true;
-                        break;
-                    }
+                    if (i == cavityParticleIndices[mm]) { isCavity = true; break; }
                 }
                 if (!isCavity) {
                     double q = charges[i];
@@ -3881,23 +4008,16 @@ double ReferenceCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bo
                     forceData[i][1] -= epsf_n * q * DqY;
                 }
             }
-            
-            // Force on cavity particle n: F_n = -K_n*q_n - eps_n*f_n*d
+
             forceData[cavityParticleIndices[m]][0] -= K_n * qPhoton[0] + epsf_n * dipole[0];
             forceData[cavityParticleIndices[m]][1] -= K_n * qPhoton[1] + epsf_n * dipole[1];
             forceData[cavityParticleIndices[m]][2] -= K_n * qPhoton[2];
         }
     }
-    
-    // Dipole self-energy: dsePrefactor * (d_x^2 + d_y^2)
-    dipoleSelfEnergy = dsePrefactor * (dipole[0]*dipole[0] + dipole[1]*dipole[1]);
-    
-    // Note: The DSE force on molecular particles is already included via the
-    // displaced coordinate formulation (DqX, DqY) used in the mode loop above.
-    // The mode loop computes: F_ix -= epsf_n * q_i * (q_nx + epsf_n/K_n * d_x)
-    // Summing the second term over modes gives: -sum_n[(epsf_n)^2/K_n] * q_i * d_x
-    //   = -2*dsePrefactor * q_i * d_x, which is exactly -dE_DSE/dr_ix.
-    
+
+    double useDSE = modEnabled ? 0.5 * dynamicDSEPrefactor : dsePrefactor;
+    dipoleSelfEnergy = useDSE * (dipole[0]*dipole[0] + dipole[1]*dipole[1]);
+
     return harmonicEnergy + couplingEnergy + dipoleSelfEnergy;
 }
 
@@ -3919,6 +4039,21 @@ void ReferenceCalcMultiModeCavityForceKernel::copyParametersToContext(ContextImp
         dsePrefactor += lambda1 * lambda1 * fn * fn;
     }
     dsePrefactor *= 0.5 * convFactor;
+
+    // Sync per-mode modulation params
+    modEnabled = force.isModulationEnabled();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    for (int i = 0; i < numModes; i++) {
+        modeGTargets[i] = force.getModeGTarget(i);
+        modeTTargets[i] = force.getModeTTargetK(i);
+        modeMinAmps[i] = force.getModeMinAmplitude(i);
+        modeMaxAmps[i] = force.getModeMaxAmplitude(i);
+        adaptiveAmplitudes[i] = modeGTargets[i];
+    }
+    lastAdaptivePeriod = -1;
 }
 
 ReferenceApplyMonteCarloBarostatKernel::~ReferenceApplyMonteCarloBarostatKernel() {

@@ -41,7 +41,10 @@ CavityForce::CavityForce(int cavityParticleIndex, double omegac, double lambdaCo
         cavityDriveEnabled(false), cavityDriveAmplitude(0.0), cavityDriveFrequency(0.0), 
         cavityDrivePhase(0.0), cavityDriveEnvelopeType(0), cavityDriveEnvParam1(0.0), cavityDriveEnvParam2(0.0),
         directLaserEnabled(false), directLaserAmplitude(0.0), directLaserFrequency(0.0),
-        directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0) {
+        directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0),
+        modulationType(ModulationNone), modAmplitude(0.0), modPeriodPs(0.0),
+        modDutyCycle(0.5), modStartTimePs(0.0), modStopTimePs(-1.0), modDecayTauPs(1.0),
+        modTargetTemperatureK(300.0), modMinAmplitude(1e-8), modMaxAmplitude(0.1) {
     if (omegac <= 0)
         throw OpenMMException("CavityForce: omegac must be positive");
     if (photonMass <= 0)
@@ -237,6 +240,49 @@ double CavityForce::getCavityDriveEnergy(const Context& context) const {
 
 double CavityForce::getDirectLaserEnergy(const Context& context) const {
     return dynamic_cast<const CavityForceImpl&>(getImplInContext(context)).getDirectLaserEnergy();
+}
+
+void CavityForce::setCouplingModulation(CouplingModulationType type, double amplitude,
+                                        double periodPs, double dutyCycle,
+                                        double startTimePs, double stopTimePs,
+                                        double decayTauPs) {
+    if (type == ModulationSquareWave && periodPs <= 0)
+        throw OpenMMException("CavityForce: square-wave modulation requires periodPs > 0");
+    if (type == ModulationSquareWave && (dutyCycle < 0 || dutyCycle > 1))
+        throw OpenMMException("CavityForce: dutyCycle must be in [0, 1]");
+    if (type == ModulationDecayingStep && decayTauPs <= 0)
+        throw OpenMMException("CavityForce: decaying-step modulation requires decayTauPs > 0");
+    modulationType = type;
+    modAmplitude = amplitude;
+    modPeriodPs = periodPs;
+    modDutyCycle = dutyCycle;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+    modDecayTauPs = decayTauPs;
+}
+
+void CavityForce::setAdaptiveSquareWaveModulation(double targetCoupling, double targetTemperatureK,
+                                                   double periodPs, double dutyCycle,
+                                                   double startTimePs, double stopTimePs,
+                                                   double minAmplitude, double maxAmplitude) {
+    if (periodPs <= 0)
+        throw OpenMMException("CavityForce: adaptive square-wave requires periodPs > 0");
+    if (dutyCycle < 0 || dutyCycle > 1)
+        throw OpenMMException("CavityForce: dutyCycle must be in [0, 1]");
+    if (targetTemperatureK <= 0)
+        throw OpenMMException("CavityForce: targetTemperatureK must be positive");
+    if (maxAmplitude <= minAmplitude)
+        throw OpenMMException("CavityForce: maxAmplitude must be > minAmplitude");
+    modulationType = ModulationAdaptiveSquareWave;
+    modAmplitude = targetCoupling;
+    modPeriodPs = periodPs;
+    modDutyCycle = dutyCycle;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+    modDecayTauPs = 1.0;
+    modTargetTemperatureK = targetTemperatureK;
+    modMinAmplitude = minAmplitude;
+    modMaxAmplitude = maxAmplitude;
 }
 
 void CavityForce::updateParametersInContext(Context& context) {

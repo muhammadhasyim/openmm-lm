@@ -4494,6 +4494,7 @@ public:
     void execute() {
         owner.reorderCharges();
         owner.updatePosCellOffsets();
+        owner.updateCachedCavityIndex();
     }
 private:
     CommonCalcCavityForceKernel& owner;
@@ -4513,9 +4514,19 @@ void CommonCalcCavityForceKernel::reorderCharges() {
 }
 
 void CommonCalcCavityForceKernel::updatePosCellOffsets() {
-    // Upload current posCellOffsets to the device buffer to keep unwrapping consistent
     const vector<mm_int4>& offsets = cc.getPosCellOffsets();
     posCellOffsetsBuffer.upload(offsets);
+}
+
+void CommonCalcCavityForceKernel::updateCachedCavityIndex() {
+    const vector<int>& atomIndex = cc.getAtomIndex();
+    cachedReorderedCavityIndex = cavityParticleIndex;
+    for (int i = 0; i < (int)atomIndex.size(); i++) {
+        if (atomIndex[i] == cavityParticleIndex) {
+            cachedReorderedCavityIndex = i;
+            break;
+        }
+    }
 }
 
 void CommonCalcCavityForceKernel::initialize(const System& system, const CavityForce& force) {
@@ -4566,7 +4577,19 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     directLaserEnvelopeType = force.getDirectLaserEnvelopeType();
     directLaserEnvParam1 = force.getDirectLaserEnvelopeParam1();
     directLaserEnvParam2 = force.getDirectLaserEnvelopeParam2();
-    
+
+    // GPU-side coupling modulation
+    modulationType = (int) force.getCouplingModulationType();
+    modAmplitude = force.getModulationAmplitude();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modDecayTauPs = force.getModulationDecayTauPs();
+    modTargetTemperatureK = force.getModulationTargetTemperatureK();
+    modMinAmplitude = force.getModulationMinAmplitude();
+    modMaxAmplitude = force.getModulationMaxAmplitude();
+
     // Add reorder listener to update charges and offsets when atoms are reordered
     ReorderListener* listener = new ReorderListener(*this);
     cc.addReorderListener(listener);
@@ -4584,7 +4607,24 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     clearDipoleKernel = program->createKernel("clearDipoleBuffer");
     computeDipoleKernel = program->createKernel("computeCavityDipole");
     computeForceKernel = program->createKernel("computeCavityForces");
-    
+
+    // Adaptive square-wave state buffer: [currentAmplitude, lastUpdatedPeriod]
+    adaptiveStateBuffer.initialize<float>(cc, 2, "cavityAdaptiveState");
+    vector<float> initState = {(float)modAmplitude, -1.0f};
+    adaptiveStateBuffer.upload(initState);
+
+    updateAdaptiveKernel = program->createKernel("updateAdaptiveAmplitude");
+    updateAdaptiveKernel->addArg(adaptiveStateBuffer);
+    updateAdaptiveKernel->addArg(); // time_ps
+    updateAdaptiveKernel->addArg(); // modPeriodPs
+    updateAdaptiveKernel->addArg(); // modStartTimePs
+    updateAdaptiveKernel->addArg(); // modStopTimePs
+    updateAdaptiveKernel->addArg(); // targetCoupling
+    updateAdaptiveKernel->addArg(); // targetTemperatureK
+    updateAdaptiveKernel->addArg(); // bathTemperatureK
+    updateAdaptiveKernel->addArg(); // minAmplitude
+    updateAdaptiveKernel->addArg(); // maxAmplitude
+
     // Set up kernels
     clearDipoleKernel->addArg(dipoleBuffer);
     
@@ -4628,12 +4668,26 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     computeForceKernel->addArg(); // env_param1_L
     computeForceKernel->addArg(); // env_param2_L
     computeForceKernel->addArg(); // directLaserEnabled
+    // GPU-side coupling modulation (args 29-35)
+    computeForceKernel->addArg(); // modType
+    computeForceKernel->addArg(); // modAmplitude
+    computeForceKernel->addArg(); // modPeriodPs
+    computeForceKernel->addArg(); // modDutyCycle
+    computeForceKernel->addArg(); // modStartTimePs
+    computeForceKernel->addArg(); // modStopTimePs
+    computeForceKernel->addArg(); // modDecayTauPs
+    computeForceKernel->addArg(adaptiveStateBuffer); // adaptiveState (arg 36)
+
+    // Initialize cached state for per-step optimizations
+    cachedReorderedCavityIndex = cavityParticleIndex;
+    updateCachedCavityIndex();
+    staticArgsSet = false;
 }
 
 double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
     ContextSelector selector(cc);
-    
-    // Use context step count for schedule (canonical; immune to extra getState/getEnergy calls)
+
+    // --- Coupling schedule (CPU-side, cheap) ---
     long long step = cc.getStepCount();
     double currentLambda = lambdaCoupling;
     if (!couplingSchedule.empty()) {
@@ -4644,29 +4698,23 @@ double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeFo
                 break;
         }
     }
-    
-    // Get reordered index of the cavity particle (OpenMM may reorder atoms internally)
-    const vector<int>& atomIndex = cc.getAtomIndex();
-    int reorderedCavityIndex = cavityParticleIndex;  // Default if no reordering
-    for (int i = 0; i < (int)atomIndex.size(); i++) {
-        if (atomIndex[i] == cavityParticleIndex) {
-            reorderedCavityIndex = i;
-            break;
-        }
-    }
-    
-    // Get periodic box vectors for unwrapping
+
+    // --- Use cached reordered cavity index (updated only on atom reorder) ---
+    int reorderedCavityIndex = cachedReorderedCavityIndex;
+
+    // --- Box vectors (needed for unwrapping) ---
     Vec3 boxVectors[3];
     context.getPeriodicBoxVectors(boxVectors[0], boxVectors[1], boxVectors[2]);
-    
-    // Upload current posCellOffsets so dipole and force kernels use unwrapped positions
-    const vector<mm_int4>& offsets = cc.getPosCellOffsets();
-    posCellOffsetsBuffer.upload(offsets);
-    
-    // Clear dipole buffer on GPU (much faster than CPU upload)
+
+    // --- posCellOffsets: REMOVED per-step upload ---
+    // The CPU-side posCellOffsets vector is only mutated during atom reordering
+    // (ComputeContext::reorderAtoms).  The ReorderListener already calls
+    // updatePosCellOffsets() which uploads the buffer.  No per-step upload needed.
+
+    // --- Clear dipole buffer ---
     clearDipoleKernel->execute(1);
-    
-    // Compute dipole moment from UNWRAPPED positions (pass box vectors and reordered cavity index)
+
+    // --- Dipole kernel: box vectors + reordered index (4 dynamic args) ---
     if (cc.getUseDoublePrecision()) {
         computeDipoleKernel->setArg(4, mm_double4(boxVectors[0][0], boxVectors[0][1], boxVectors[0][2], 0.0));
         computeDipoleKernel->setArg(5, mm_double4(boxVectors[1][0], boxVectors[1][1], boxVectors[1][2], 0.0));
@@ -4678,13 +4726,61 @@ double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeFo
     }
     computeDipoleKernel->setArg(7, reorderedCavityIndex);
     computeDipoleKernel->execute(cc.getNumAtoms());
-    
-    // Get current time in picoseconds
+
     double time_ps = cc.getTime();
-    
-    // Compute forces and energies
-    // Arguments: posq, charges, forces, dipole, energy, posCellOffsets, boxX, boxY, boxZ, reorderedIdx, omegac, lambda, mass, paddedNum
-    // Use appropriate precision for box vectors
+
+    // --- Adaptive amplitude update (conditional, 1 thread) ---
+    if (modulationType == 4) {
+        double bathTempK = 300.0;
+        try {
+            bathTempK = context.getParameter(BussiThermostat::Temperature());
+        } catch (...) {}
+        updateAdaptiveKernel->setArg(1, (float)time_ps);
+        updateAdaptiveKernel->setArg(2, (float)modPeriodPs);
+        updateAdaptiveKernel->setArg(3, (float)modStartTimePs);
+        updateAdaptiveKernel->setArg(4, (float)modStopTimePs);
+        updateAdaptiveKernel->setArg(5, (float)modAmplitude);
+        updateAdaptiveKernel->setArg(6, (float)modTargetTemperatureK);
+        updateAdaptiveKernel->setArg(7, (float)bathTempK);
+        updateAdaptiveKernel->setArg(8, (float)modMinAmplitude);
+        updateAdaptiveKernel->setArg(9, (float)modMaxAmplitude);
+        updateAdaptiveKernel->execute(1);
+    }
+
+    // --- Force kernel: set STATIC args once, DYNAMIC args every step ---
+    //
+    // Static args (15-28, 29-35): laser params, modulation params, omegac,
+    // photonMass, paddedNumAtoms. These only change via copyParametersToContext.
+    // Dynamic args (6-8, 9, 11, 14): box vectors, reorderedIdx, lambda, time_ps.
+    if (!staticArgsSet) {
+        computeForceKernel->setArg(10, (float)omegac);
+        computeForceKernel->setArg(12, (float)photonMass);
+        computeForceKernel->setArg(13, cc.getPaddedNumAtoms());
+        computeForceKernel->setArg(15, (float)cavityDriveAmplitude);
+        computeForceKernel->setArg(16, (float)cavityDriveFrequency);
+        computeForceKernel->setArg(17, (float)cavityDrivePhase);
+        computeForceKernel->setArg(18, (int)cavityDriveEnvelopeType);
+        computeForceKernel->setArg(19, (float)cavityDriveEnvParam1);
+        computeForceKernel->setArg(20, (float)cavityDriveEnvParam2);
+        computeForceKernel->setArg(21, (int)(cavityDriveEnabled ? 1 : 0));
+        computeForceKernel->setArg(22, (float)directLaserAmplitude);
+        computeForceKernel->setArg(23, (float)directLaserFrequency);
+        computeForceKernel->setArg(24, (float)directLaserPhase);
+        computeForceKernel->setArg(25, (int)directLaserEnvelopeType);
+        computeForceKernel->setArg(26, (float)directLaserEnvParam1);
+        computeForceKernel->setArg(27, (float)directLaserEnvParam2);
+        computeForceKernel->setArg(28, (int)(directLaserEnabled ? 1 : 0));
+        computeForceKernel->setArg(29, (int)modulationType);
+        computeForceKernel->setArg(30, (float)modAmplitude);
+        computeForceKernel->setArg(31, (float)modPeriodPs);
+        computeForceKernel->setArg(32, (float)modDutyCycle);
+        computeForceKernel->setArg(33, (float)modStartTimePs);
+        computeForceKernel->setArg(34, (float)modStopTimePs);
+        computeForceKernel->setArg(35, (float)modDecayTauPs);
+        staticArgsSet = true;
+    }
+
+    // Dynamic args: box vectors, reordered index, lambda, time (6 setArg calls)
     if (cc.getUseDoublePrecision()) {
         computeForceKernel->setArg(6, mm_double4(boxVectors[0][0], boxVectors[0][1], boxVectors[0][2], 0.0));
         computeForceKernel->setArg(7, mm_double4(boxVectors[1][0], boxVectors[1][1], boxVectors[1][2], 0.0));
@@ -4695,26 +4791,8 @@ double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeFo
         computeForceKernel->setArg(8, mm_float4((float)boxVectors[2][0], (float)boxVectors[2][1], (float)boxVectors[2][2], 0.0f));
     }
     computeForceKernel->setArg(9, reorderedCavityIndex);
-    computeForceKernel->setArg(10, (float) omegac);
-    computeForceKernel->setArg(11, (float) currentLambda);
-    computeForceKernel->setArg(12, (float) photonMass);
-    computeForceKernel->setArg(13, cc.getPaddedNumAtoms()); // paddedNumAtoms - must be set at runtime
-    // Laser parameters (starting from argument index 14)
+    computeForceKernel->setArg(11, (float)currentLambda);
     computeForceKernel->setArg(14, (float)time_ps);
-    computeForceKernel->setArg(15, (float)cavityDriveAmplitude);
-    computeForceKernel->setArg(16, (float)cavityDriveFrequency);
-    computeForceKernel->setArg(17, (float)cavityDrivePhase);
-    computeForceKernel->setArg(18, (int)cavityDriveEnvelopeType);
-    computeForceKernel->setArg(19, (float)cavityDriveEnvParam1);
-    computeForceKernel->setArg(20, (float)cavityDriveEnvParam2);
-    computeForceKernel->setArg(21, (int)(cavityDriveEnabled ? 1 : 0));
-    computeForceKernel->setArg(22, (float)directLaserAmplitude);
-    computeForceKernel->setArg(23, (float)directLaserFrequency);
-    computeForceKernel->setArg(24, (float)directLaserPhase);
-    computeForceKernel->setArg(25, (int)directLaserEnvelopeType);
-    computeForceKernel->setArg(26, (float)directLaserEnvParam1);
-    computeForceKernel->setArg(27, (float)directLaserEnvParam2);
-    computeForceKernel->setArg(28, (int)(directLaserEnabled ? 1 : 0));
     computeForceKernel->execute(cc.getNumAtoms());
     
     // Download energy components
@@ -4761,6 +4839,23 @@ void CommonCalcCavityForceKernel::copyParametersToContext(ContextImpl& context, 
     directLaserEnvelopeType = force.getDirectLaserEnvelopeType();
     directLaserEnvParam1 = force.getDirectLaserEnvelopeParam1();
     directLaserEnvParam2 = force.getDirectLaserEnvelopeParam2();
+    // GPU-side coupling modulation
+    modulationType = (int) force.getCouplingModulationType();
+    modAmplitude = force.getModulationAmplitude();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modDecayTauPs = force.getModulationDecayTauPs();
+    modTargetTemperatureK = force.getModulationTargetTemperatureK();
+    modMinAmplitude = force.getModulationMinAmplitude();
+    modMaxAmplitude = force.getModulationMaxAmplitude();
+    // Re-initialize adaptive state buffer when modulation params change
+    vector<float> initState = {(float)modAmplitude, -1.0f};
+    adaptiveStateBuffer.upload(initState);
+    // Force static args to be re-set on next execute()
+    staticArgsSet = false;
+    updateCachedCavityIndex();
 }
 
 // ==================== CavityParticleDisplacer Kernel Implementation ====================
@@ -4997,6 +5092,59 @@ void CommonCalcMultiModeCavityForceKernel::initialize(const System& system, cons
     computeForcesKernel->addArg(cavityIndicesBuffer);
     computeForcesKernel->addArg(); // dsePrefactor - set at runtime
     computeForcesKernel->addArg(cc.getPaddedNumAtoms());
+    // Per-mode adaptive modulation args (13-22)
+    computeForcesKernel->addArg(); // adaptiveState buffer - set below
+    computeForcesKernel->addArg(); // modulationEnabled
+    computeForcesKernel->addArg(); // modPeriodPs
+    computeForcesKernel->addArg(); // modDutyCycle
+    computeForcesKernel->addArg(); // modStartTimePs
+    computeForcesKernel->addArg(); // modStopTimePs
+    computeForcesKernel->addArg(); // time_ps
+    computeForcesKernel->addArg(); // omega1
+    computeForcesKernel->addArg(); // conversionFactor
+    computeForcesKernel->addArg(); // photonMassAu
+
+    // Per-mode adaptive modulation state
+    modEnabled = force.isModulationEnabled();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    modeGTargets.resize(numModes);
+    modeTTargets.resize(numModes);
+    modeMinAmps.resize(numModes);
+    modeMaxAmps.resize(numModes);
+    for (int i = 0; i < numModes; i++) {
+        modeGTargets[i] = force.getModeGTarget(i);
+        modeTTargets[i] = force.getModeTTargetK(i);
+        modeMinAmps[i] = force.getModeMinAmplitude(i);
+        modeMaxAmps[i] = force.getModeMaxAmplitude(i);
+    }
+
+    modeModParamsBuffer.initialize<mm_float4>(cc, numModes, "multiModeModParams");
+    modeAdaptiveStateBuffer.initialize<mm_float2>(cc, numModes, "multiModeAdaptiveState");
+
+    vector<mm_float4> modParamsData(numModes);
+    vector<mm_float2> adaptiveInitData(numModes);
+    for (int i = 0; i < numModes; i++) {
+        modParamsData[i] = mm_float4((float)modeGTargets[i], (float)modeTTargets[i],
+                                     (float)modeMinAmps[i], (float)modeMaxAmps[i]);
+        adaptiveInitData[i] = mm_float2((float)modeGTargets[i], -1.0f);
+    }
+    modeModParamsBuffer.upload(modParamsData);
+    modeAdaptiveStateBuffer.upload(adaptiveInitData);
+
+    updateAdaptiveKernel = program->createKernel("updateMultiModeAdaptiveAmplitudes");
+    updateAdaptiveKernel->addArg(modeAdaptiveStateBuffer);
+    updateAdaptiveKernel->addArg(modeModParamsBuffer);
+    updateAdaptiveKernel->addArg(); // time_ps
+    updateAdaptiveKernel->addArg(); // periodPs
+    updateAdaptiveKernel->addArg(); // startTimePs
+    updateAdaptiveKernel->addArg(); // stopTimePs
+    updateAdaptiveKernel->addArg(); // bathTemperatureK
+
+    // Set the adaptiveState buffer arg on the force kernel
+    computeForcesKernel->setArg(13, modeAdaptiveStateBuffer);
 }
 
 double CommonCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bool includeForces, bool includeEnergy) {
@@ -5037,6 +5185,37 @@ double CommonCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bool 
     }
     computeForcesKernel->setArg(11, (float) dsePrefactor);
     computeForcesKernel->setArg(12, cc.getPaddedNumAtoms());
+
+    // Per-mode adaptive modulation
+    double time_ps = cc.getTime();
+    if (modEnabled) {
+        double bathTempK = 300.0;
+        try {
+            bathTempK = context.getParameter(BussiThermostat::Temperature());
+        } catch (...) {}
+        updateAdaptiveKernel->setArg(2, (float)time_ps);
+        updateAdaptiveKernel->setArg(3, (float)modPeriodPs);
+        updateAdaptiveKernel->setArg(4, (float)modStartTimePs);
+        updateAdaptiveKernel->setArg(5, (float)modStopTimePs);
+        updateAdaptiveKernel->setArg(6, (float)bathTempK);
+        updateAdaptiveKernel->execute(1);
+    }
+
+    const double HARTREE_TO_KJMOL_E = 2625.4996;
+    const double BOHR_TO_NM_E = 0.052917721;
+    const double AMU_TO_AU_E = 1822.8885;
+    const double CONV_E = HARTREE_TO_KJMOL_E / (BOHR_TO_NM_E * BOHR_TO_NM_E);
+    double photonMass_au_e = photonMass * AMU_TO_AU_E;
+
+    computeForcesKernel->setArg(14, (int)(modEnabled ? 1 : 0));
+    computeForcesKernel->setArg(15, (float)modPeriodPs);
+    computeForcesKernel->setArg(16, (float)modDutyCycle);
+    computeForcesKernel->setArg(17, (float)modStartTimePs);
+    computeForcesKernel->setArg(18, (float)modStopTimePs);
+    computeForcesKernel->setArg(19, (float)time_ps);
+    computeForcesKernel->setArg(20, (float)omega1);
+    computeForcesKernel->setArg(21, (float)CONV_E);
+    computeForcesKernel->setArg(22, (float)photonMass_au_e);
     computeForcesKernel->execute(cc.getNumAtoms());
     
     // Download energy components
@@ -5074,6 +5253,28 @@ void CommonCalcMultiModeCavityForceKernel::copyParametersToContext(ContextImpl& 
     }
     dsePrefactor *= 0.5 * CONVERSION_FACTOR / photonMass_au;
     
+    // Sync per-mode modulation params
+    modEnabled = force.isModulationEnabled();
+    modPeriodPs = force.getModulationPeriodPs();
+    modDutyCycle = force.getModulationDutyCycle();
+    modStartTimePs = force.getModulationStartTimePs();
+    modStopTimePs = force.getModulationStopTimePs();
+    for (int i = 0; i < numModes; i++) {
+        modeGTargets[i] = force.getModeGTarget(i);
+        modeTTargets[i] = force.getModeTTargetK(i);
+        modeMinAmps[i] = force.getModeMinAmplitude(i);
+        modeMaxAmps[i] = force.getModeMaxAmplitude(i);
+    }
+    vector<mm_float4> modParamsData(numModes);
+    vector<mm_float2> adaptiveInitData(numModes);
+    for (int i = 0; i < numModes; i++) {
+        modParamsData[i] = mm_float4((float)modeGTargets[i], (float)modeTTargets[i],
+                                     (float)modeMinAmps[i], (float)modeMaxAmps[i]);
+        adaptiveInitData[i] = mm_float2((float)modeGTargets[i], -1.0f);
+    }
+    modeModParamsBuffer.upload(modParamsData);
+    modeAdaptiveStateBuffer.upload(adaptiveInitData);
+
     // Re-upload reordered data
     reorderData();
 }

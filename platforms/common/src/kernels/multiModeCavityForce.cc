@@ -39,6 +39,53 @@ KERNEL void clearMultiModeBuffers(GLOBAL float* RESTRICT dipole,
 }
 
 /**
+ * Update per-mode adaptive amplitudes on the GPU.
+ * Runs as 1 thread before the force kernel. Checks whether a new square-wave
+ * period started; if so, updates each mode's amplitude independently:
+ *   g_next_n = g_target_n * sqrt(T_target_n / max(T_bath, 1))
+ *
+ * adaptiveState: float2[NUM_MODES], .x = currentAmplitude, .y = lastUpdatedPeriod
+ * modParams:     float4[NUM_MODES], .x = g_target, .y = T_target, .z = minAmp, .w = maxAmp
+ */
+KERNEL void updateMultiModeAdaptiveAmplitudes(
+        GLOBAL float2* RESTRICT adaptiveState,
+        GLOBAL const float4* RESTRICT modModParams,
+        float time_ps, float periodPs, float startTimePs, float stopTimePs,
+        float bathTemperatureK) {
+    if (GLOBAL_ID != 0) return;
+
+    if (time_ps < startTimePs) {
+        for (int n = 0; n < NUM_MODES; n++)
+            adaptiveState[n].x = modModParams[n].x;
+        return;
+    }
+    if (stopTimePs >= 0.0f && time_ps >= stopTimePs) {
+        for (int n = 0; n < NUM_MODES; n++)
+            adaptiveState[n].x = 0.0f;
+        return;
+    }
+
+    float dt = time_ps - startTimePs;
+    int currentPeriod = (int)(dt / periodPs);
+
+    for (int n = 0; n < NUM_MODES; n++) {
+        int lastPeriod = (int)adaptiveState[n].y;
+        if (currentPeriod > lastPeriod) {
+            float4 mp = modModParams[n];
+            float g_target = mp.x;
+            float T_target = mp.y;
+            float minAmp = mp.z;
+            float maxAmp = mp.w;
+            float T_bath = fmaxf(bathTemperatureK, 1.0f);
+            float newAmp = g_target * sqrtf(T_target / T_bath);
+            newAmp = fmaxf(minAmp, fminf(maxAmp, newAmp));
+            adaptiveState[n].x = newAmp;
+            adaptiveState[n].y = (float)currentPeriod;
+        }
+    }
+}
+
+/**
  * Compute the molecular dipole moment, excluding ALL cavity particles.
  * Uses UNWRAPPED positions (posq corrected by posCellOffsets) so that the
  * dipole is continuous across periodic boundaries -- matching cav-hoomd.
@@ -111,51 +158,86 @@ KERNEL void computeMultiModeForces(GLOBAL const real4* RESTRICT posq,
         GLOBAL const float4* RESTRICT modeParams,
         GLOBAL const int* RESTRICT cavityIndices,
         float dsePrefactor,
-        int paddedNumAtoms) {
+        int paddedNumAtoms,
+        GLOBAL const float2* RESTRICT adaptiveState,
+        int modulationEnabled,
+        float modPeriodPs, float modDutyCycle,
+        float modStartTimePs, float modStopTimePs, float time_ps,
+        float omega1, float conversionFactor, float photonMassAu) {
 
-    // Read dipole from global memory (computed by computeMultiModeDipole)
+    const float HARTREE_TO_KJMOL = 2625.4996f;
+    const float BOHR_TO_NM = 0.052917721f;
+    const float AMU_TO_AU = 1822.8885f;
+    const float CONV = HARTREE_TO_KJMOL / (BOHR_TO_NM * BOHR_TO_NM);
+
     float dipoleX = dipole[0];
     float dipoleY = dipole[1];
 
-    // Compute energy components (only first thread)
+    // Determine per-mode effective lambda when modulation is active
+    // For non-modulated path, eps_n comes from modeParams[n].y (precomputed)
+    float effectiveLambda[NUM_MODES];
+    float effectiveEps[NUM_MODES];
+    float dynamicDSEPrefactor = dsePrefactor;
+
+    if (modulationEnabled) {
+        float squareWaveOn = 0.0f;
+        if (time_ps >= modStartTimePs && (modStopTimePs < 0.0f || time_ps < modStopTimePs)) {
+            float dt = time_ps - modStartTimePs;
+            float phase = dt / modPeriodPs;
+            phase = phase - floorf(phase);
+            squareWaveOn = (phase < modDutyCycle) ? 1.0f : 0.0f;
+        }
+
+        dynamicDSEPrefactor = 0.0f;
+        for (int n = 0; n < NUM_MODES; n++) {
+            float lambda_n = squareWaveOn * adaptiveState[n].x;
+            effectiveLambda[n] = lambda_n;
+            float omega_n = (float)(n + 1) * omega1;
+            float eps_n = lambda_n * omega_n * CONV;
+            effectiveEps[n] = eps_n;
+            float f_n = modeParams[n].z;
+            float K_n = modeParams[n].x;
+            if (K_n > 0.0f)
+                dynamicDSEPrefactor += eps_n * eps_n / K_n * f_n * f_n;
+        }
+        dynamicDSEPrefactor *= 0.5f;
+    } else {
+        for (int n = 0; n < NUM_MODES; n++) {
+            effectiveEps[n] = modeParams[n].y;
+        }
+    }
+
+    // Energy (thread 0 only)
     if (GLOBAL_ID == 0) {
         float harmonicTotal = 0.0f;
         float couplingTotal = 0.0f;
 
         for (int n = 0; n < NUM_MODES; n++) {
-            float4 mp = modeParams[n];
-            float K_n = mp.x;
-            float eps_n = mp.y;
-            float f_n = mp.z;
-            int cavIdx = (int) mp.w;
+            float K_n = modeParams[n].x;
+            float eps_n = effectiveEps[n];
+            float f_n = modeParams[n].z;
+            int cavIdx = (int) modeParams[n].w;
 
-            // Unwrap cavity particle position for this mode
             real4 posWrapped = posq[cavIdx];
             int4 offset = posCellOffsets[cavIdx];
             float qx = posWrapped.x - offset.x * periodicBoxVecX.x - offset.y * periodicBoxVecY.x - offset.z * periodicBoxVecZ.x;
             float qy = posWrapped.y - offset.x * periodicBoxVecX.y - offset.y * periodicBoxVecY.y - offset.z * periodicBoxVecZ.y;
             float qz = posWrapped.z - offset.x * periodicBoxVecX.z - offset.y * periodicBoxVecY.z - offset.z * periodicBoxVecZ.z;
 
-            // Harmonic energy: (1/2) * K_n * q_n^2
             harmonicTotal += 0.5f * K_n * (qx*qx + qy*qy + qz*qz);
-
-            // Coupling energy: eps_n * f_n * q_n . d (x,y only)
             couplingTotal += eps_n * f_n * (qx*dipoleX + qy*dipoleY);
         }
 
-        // Dipole self-energy: dsePrefactor * (d_x^2 + d_y^2)
-        float dipoleSelfTotal = dsePrefactor * (dipoleX*dipoleX + dipoleY*dipoleY);
+        float useDSE = modulationEnabled ? dynamicDSEPrefactor : dsePrefactor;
+        float dipoleSelfTotal = useDSE * (dipoleX*dipoleX + dipoleY*dipoleY);
 
         energyBuffer[0] = harmonicTotal;
         energyBuffer[1] = couplingTotal;
         energyBuffer[2] = dipoleSelfTotal;
     }
 
-    // Force on molecular particles: sum over modes of -eps_n * f_n * charge_i * Dq_n
-    // where Dq_n = q_n + (eps_n * f_n / K_n) * d
-    // Plus DSE force: -2 * dsePrefactor * charge_i * d
+    // Molecular particle forces
     for (int i = GLOBAL_ID; i < NUM_ATOMS; i += GLOBAL_SIZE) {
-        // Check if this particle is a cavity particle
         bool isCavity = false;
         for (int m = 0; m < NUM_MODES; m++) {
             if (i == cavityIndices[m]) {
@@ -170,53 +252,39 @@ KERNEL void computeMultiModeForces(GLOBAL const real4* RESTRICT posq,
             float fy = 0.0f;
 
             for (int n = 0; n < NUM_MODES; n++) {
-                float4 mp = modeParams[n];
-                float K_n = mp.x;
-                float eps_n = mp.y;
-                float f_n = mp.z;
-                int cavIdx = (int) mp.w;
+                float K_n = modeParams[n].x;
+                float eps_n = effectiveEps[n];
+                float f_n = modeParams[n].z;
+                int cavIdx = (int) modeParams[n].w;
                 float epsf_n = eps_n * f_n;
 
-                // Unwrap cavity particle position for this mode
                 real4 posWrapped = posq[cavIdx];
                 int4 offset = posCellOffsets[cavIdx];
                 float qx = posWrapped.x - offset.x * periodicBoxVecX.x - offset.y * periodicBoxVecY.x - offset.z * periodicBoxVecZ.x;
                 float qy = posWrapped.y - offset.x * periodicBoxVecX.y - offset.y * periodicBoxVecY.y - offset.z * periodicBoxVecZ.y;
 
-                // Displaced cavity position: Dq_n = q_n + (eps_n*f_n/K_n) * d
-                float epsfOverK_n = epsf_n / K_n;
+                float epsfOverK_n = (K_n > 0.0f) ? (epsf_n / K_n) : 0.0f;
                 float DqX = qx + epsfOverK_n * dipoleX;
                 float DqY = qy + epsfOverK_n * dipoleY;
 
-                // Force contribution from mode n: -eps_n*f_n * charge_i * Dq_n
-                // The displaced coordinate Dq_n includes the DSE contribution:
-                //   sum_n(epsf_n^2/K_n)*q_i*d = 2*dsePrefactor*q_i*d
                 fx += -epsf_n * q_i * DqX;
                 fy += -epsf_n * q_i * DqY;
             }
 
-            // Note: DSE force on molecular particles is already included via the
-            // displaced coordinate formulation (DqX, DqY) above. No explicit DSE
-            // force term is needed.
-
-            // Convert to fixed point and add to force buffer
             ATOMIC_ADD(&forceBuffers[i], (mm_ulong) realToFixedPoint((real)fx));
             ATOMIC_ADD(&forceBuffers[i+paddedNumAtoms], (mm_ulong) realToFixedPoint((real)fy));
         }
     }
 
-    // Force on cavity particles: one per mode
-    // F_n = -K_n * q_n - eps_n * f_n * d
+    // Cavity particle forces
     if (GLOBAL_ID == 0) {
         for (int n = 0; n < NUM_MODES; n++) {
-            float4 mp = modeParams[n];
-            float K_n = mp.x;
-            float eps_n = mp.y;
-            float f_n = mp.z;
-            int cavIdx = (int) mp.w;
+            float K_n = modeParams[n].x;
+            float eps_n = effectiveEps[n];
+            float f_n = modeParams[n].z;
+            int cavIdx = (int) modeParams[n].w;
             float epsf_n = eps_n * f_n;
 
-            // Unwrap cavity particle position for this mode
             real4 posWrapped = posq[cavIdx];
             int4 offset = posCellOffsets[cavIdx];
             float qx = posWrapped.x - offset.x * periodicBoxVecX.x - offset.y * periodicBoxVecY.x - offset.z * periodicBoxVecZ.x;

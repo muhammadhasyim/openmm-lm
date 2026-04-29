@@ -73,6 +73,26 @@ namespace OpenMM {
 class OPENMM_EXPORT CavityForce : public Force {
 public:
     /**
+     * Coupling modulation types for GPU-side evaluation.
+     * When a modulation is active, the kernel computes lambda from time_ps
+     * without host synchronization — eliminating the Python round-trip.
+     */
+    enum CouplingModulationType {
+        /** No modulation; use the constant lambdaCoupling value. */
+        ModulationNone = 0,
+        /** Step function: 0 before startTime, amplitude after. */
+        ModulationStep = 1,
+        /** Periodic square wave with configurable duty cycle. */
+        ModulationSquareWave = 2,
+        /** Step with exponential decay: amplitude * exp(-(t-startTime)/decayTau). */
+        ModulationDecayingStep = 3,
+        /** Adaptive square wave: amplitude updates per-period as
+         *  g_next = g_target * sqrt(T_target / T_bath).
+         *  T_bath is read from the BussiThermostat context parameter each step.
+         *  A persistent GPU buffer stores the current amplitude across steps. */
+        ModulationAdaptiveSquareWave = 4
+    };
+    /**
      * Parameter name for the cavity frequency (in atomic units).
      */
     static const std::string& OmegaC() {
@@ -292,11 +312,59 @@ public:
     /**
      * Get the direct laser-molecule energy: E_laser = -E_ext(t) * μ
      * This must be called after forces have been computed.
-     * 
+     *
      * @param context  the Context to query
      * @return the direct laser energy in kJ/mol
      */
     double getDirectLaserEnergy(const Context& context) const;
+    /**
+     * Set GPU-side coupling modulation.  Once set, the kernel evaluates lambda
+     * from time_ps each step without any host round-trip.
+     *
+     * @param type          modulation type (ModulationNone, ModulationStep,
+     *                      ModulationSquareWave, ModulationDecayingStep)
+     * @param amplitude     lambda value when coupling is "on"
+     * @param periodPs      square-wave period in ps (ignored for step types)
+     * @param dutyCycle     fraction of period that is "on" [0,1] (square wave only)
+     * @param startTimePs   time (ps) at which modulation activates
+     * @param stopTimePs    time (ps) at which modulation deactivates (-1 = never)
+     * @param decayTauPs    exponential decay time constant (DecayingStep only)
+     */
+    void setCouplingModulation(CouplingModulationType type, double amplitude,
+                               double periodPs = 0.0, double dutyCycle = 0.5,
+                               double startTimePs = 0.0, double stopTimePs = -1.0,
+                               double decayTauPs = 1.0);
+    /**
+     * Get the current coupling modulation type.
+     */
+    CouplingModulationType getCouplingModulationType() const { return modulationType; }
+    double getModulationAmplitude() const { return modAmplitude; }
+    double getModulationPeriodPs() const { return modPeriodPs; }
+    double getModulationDutyCycle() const { return modDutyCycle; }
+    double getModulationStartTimePs() const { return modStartTimePs; }
+    double getModulationStopTimePs() const { return modStopTimePs; }
+    double getModulationDecayTauPs() const { return modDecayTauPs; }
+    /**
+     * Set GPU-side adaptive square-wave modulation.  The amplitude updates
+     * once per period on the GPU: g_next = targetCoupling * sqrt(targetTempK / T_bath).
+     * T_bath is read from the BussiThermostat context parameter each step.
+     *
+     * @param targetCoupling     g_target (dimensionless)
+     * @param targetTemperatureK T_target in Kelvin
+     * @param periodPs           square-wave period (ps)
+     * @param dutyCycle          fraction ON [0,1]. Default 0.5.
+     * @param startTimePs        activation time (ps). Default 0.
+     * @param stopTimePs         deactivation time (-1 = never). Default -1.
+     * @param minAmplitude       lower clamp. Default 1e-8.
+     * @param maxAmplitude       upper clamp. Default 0.1.
+     */
+    void setAdaptiveSquareWaveModulation(double targetCoupling, double targetTemperatureK,
+                                         double periodPs, double dutyCycle = 0.5,
+                                         double startTimePs = 0.0, double stopTimePs = -1.0,
+                                         double minAmplitude = 1e-8, double maxAmplitude = 0.1);
+    double getModulationTargetTemperatureK() const { return modTargetTemperatureK; }
+    double getModulationMinAmplitude() const { return modMinAmplitude; }
+    double getModulationMaxAmplitude() const { return modMaxAmplitude; }
     /**
      * Update the parameters in a Context to match those stored in this Force object.
      * 
@@ -337,6 +405,18 @@ private:
     int directLaserEnvelopeType;
     double directLaserEnvParam1;
     double directLaserEnvParam2;
+    // GPU-side coupling modulation parameters
+    CouplingModulationType modulationType;
+    double modAmplitude;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    double modDecayTauPs;
+    // Adaptive square-wave additional parameters
+    double modTargetTemperatureK;
+    double modMinAmplitude;
+    double modMaxAmplitude;
 };
 
 } // namespace OpenMM

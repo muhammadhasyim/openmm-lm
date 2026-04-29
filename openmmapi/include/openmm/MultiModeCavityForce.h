@@ -258,6 +258,39 @@ public:
      */
     double getTotalCavityEnergy(const Context& context) const;
     /**
+     * Enable adaptive square-wave modulation with shared timing for all modes.
+     * Each mode adapts its own amplitude via g_next = g_target_n * sqrt(T_target_n / T_bath).
+     * Per-mode coupling parameters must be set via setModeModulationParams() for each mode.
+     *
+     * @param periodPs     square-wave period in ps (shared by all modes)
+     * @param dutyCycle    fraction of period that is ON [0,1] (shared)
+     * @param startTimePs  activation time in ps (shared)
+     * @param stopTimePs   deactivation time in ps; -1 = never (shared)
+     */
+    void setAdaptiveSquareWaveModulation(double periodPs, double dutyCycle = 0.5,
+                                         double startTimePs = 0.0, double stopTimePs = -1.0);
+    /**
+     * Set per-mode adaptive coupling parameters. Must be called after
+     * setAdaptiveSquareWaveModulation() and for each mode index 0..numModes-1.
+     *
+     * @param modeIndex    0-based mode index
+     * @param gTarget      target coupling g_target_n (dimensionless)
+     * @param tTargetK     target temperature T_target_n in Kelvin
+     * @param minAmplitude lower amplitude clamp
+     * @param maxAmplitude upper amplitude clamp
+     */
+    void setModeModulationParams(int modeIndex, double gTarget, double tTargetK,
+                                 double minAmplitude = 1e-8, double maxAmplitude = 0.1);
+    bool isModulationEnabled() const { return modEnabled; }
+    double getModulationPeriodPs() const { return modPeriodPs; }
+    double getModulationDutyCycle() const { return modDutyCycle; }
+    double getModulationStartTimePs() const { return modStartTimePs; }
+    double getModulationStopTimePs() const { return modStopTimePs; }
+    double getModeGTarget(int modeIndex) const { return modeGTargets[modeIndex]; }
+    double getModeTTargetK(int modeIndex) const { return modeTTargets[modeIndex]; }
+    double getModeMinAmplitude(int modeIndex) const { return modeMinAmps[modeIndex]; }
+    double getModeMaxAmplitude(int modeIndex) const { return modeMaxAmps[modeIndex]; }
+    /**
      * Update the parameters in a Context to match those stored in this Force object.
      *
      * @param context  the Context to update
@@ -283,6 +316,16 @@ private:
     std::vector<int> cavityParticleIndices;
     std::vector<double> spatialProfiles;
     double dsePrefactor;
+    // Per-mode adaptive square-wave modulation
+    bool modEnabled;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    std::vector<double> modeGTargets;
+    std::vector<double> modeTTargets;
+    std::vector<double> modeMinAmps;
+    std::vector<double> modeMaxAmps;
     /**
      * Recompute spatial profiles and DSE prefactor from current parameters.
      */

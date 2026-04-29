@@ -1903,7 +1903,11 @@ public:
         cavityDriveEnabled(false), cavityDriveAmplitude(0.0), cavityDriveFrequency(0.0),
         cavityDrivePhase(0.0), cavityDriveEnvelopeType(0), cavityDriveEnvParam1(0.0), cavityDriveEnvParam2(0.0),
         directLaserEnabled(false), directLaserAmplitude(0.0), directLaserFrequency(0.0),
-        directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0) {
+        directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0),
+        modulationType(0), modAmplitude(0.0), modPeriodPs(0.0), modDutyCycle(0.5),
+        modStartTimePs(0.0), modStopTimePs(-1.0), modDecayTauPs(1.0),
+        modTargetTemperatureK(300.0), modMinAmplitude(1e-8), modMaxAmplitude(0.1),
+        adaptiveAmplitude(0.0), lastAdaptivePeriod(-1) {
     }
     /**
      * Initialize the kernel.
@@ -1968,6 +1972,21 @@ private:
     double computeEnvelope(double time_ps, int envelope_type, double env_param1, double env_param2) const;
     double computeCavityDrive(double time_ps) const;
     double computeDirectLaserField(double time_ps) const;
+    double evaluateModulation(double time_ps);
+    // GPU-side coupling modulation
+    int modulationType;
+    double modAmplitude;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    double modDecayTauPs;
+    double modTargetTemperatureK;
+    double modMinAmplitude;
+    double modMaxAmplitude;
+    double adaptiveAmplitude;
+    int lastAdaptivePeriod;
+    double lastBathTemperatureK;
 };
 
 /**
@@ -2001,7 +2020,9 @@ class ReferenceCalcMultiModeCavityForceKernel : public CalcMultiModeCavityForceK
 public:
     ReferenceCalcMultiModeCavityForceKernel(std::string name, const Platform& platform) :
         CalcMultiModeCavityForceKernel(name, platform),
-        harmonicEnergy(0.0), couplingEnergy(0.0), dipoleSelfEnergy(0.0) {
+        harmonicEnergy(0.0), couplingEnergy(0.0), dipoleSelfEnergy(0.0),
+        modEnabled(false), modPeriodPs(0.0), modDutyCycle(0.5),
+        modStartTimePs(0.0), modStopTimePs(-1.0), lastAdaptivePeriod(-1) {
     }
     void initialize(const System& system, const MultiModeCavityForce& force);
     double execute(ContextImpl& context, bool includeForces, bool includeEnergy);
@@ -2023,6 +2044,18 @@ private:
     double harmonicEnergy;
     double couplingEnergy;
     double dipoleSelfEnergy;
+    // Per-mode adaptive square-wave modulation
+    bool modEnabled;
+    double modPeriodPs;
+    double modDutyCycle;
+    double modStartTimePs;
+    double modStopTimePs;
+    std::vector<double> modeGTargets;
+    std::vector<double> modeTTargets;
+    std::vector<double> modeMinAmps;
+    std::vector<double> modeMaxAmps;
+    std::vector<double> adaptiveAmplitudes;
+    int lastAdaptivePeriod;
 };
 
 /**

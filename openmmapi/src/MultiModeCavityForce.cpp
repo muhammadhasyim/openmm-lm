@@ -40,7 +40,11 @@ MultiModeCavityForce::MultiModeCavityForce(int numModes, double omega1, double l
                                            double photonMass) :
         numModes(numModes), omega1(omega1), lambda1(lambda1),
         cavityLength(cavityLength), moleculeZ(moleculeZ),
-        photonMass(photonMass), dsePrefactor(0.0) {
+        photonMass(photonMass), dsePrefactor(0.0),
+        modEnabled(false), modPeriodPs(0.0), modDutyCycle(0.5),
+        modStartTimePs(0.0), modStopTimePs(-1.0),
+        modeGTargets(numModes, 0.0), modeTTargets(numModes, 300.0),
+        modeMinAmps(numModes, 1e-8), modeMaxAmps(numModes, 0.1) {
     if (numModes < 1)
         throw OpenMMException("MultiModeCavityForce: numModes must be >= 1");
     if (omega1 <= 0)
@@ -131,6 +135,36 @@ double MultiModeCavityForce::getDipoleSelfEnergy(const Context& context) const {
 
 double MultiModeCavityForce::getTotalCavityEnergy(const Context& context) const {
     return getHarmonicEnergy(context) + getCouplingEnergy(context) + getDipoleSelfEnergy(context);
+}
+
+void MultiModeCavityForce::setAdaptiveSquareWaveModulation(double periodPs, double dutyCycle,
+                                                            double startTimePs, double stopTimePs) {
+    if (periodPs <= 0)
+        throw OpenMMException("MultiModeCavityForce: periodPs must be positive");
+    if (dutyCycle < 0 || dutyCycle > 1)
+        throw OpenMMException("MultiModeCavityForce: dutyCycle must be in [0, 1]");
+    modEnabled = true;
+    modPeriodPs = periodPs;
+    modDutyCycle = dutyCycle;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+}
+
+void MultiModeCavityForce::setModeModulationParams(int modeIndex, double gTarget, double tTargetK,
+                                                    double minAmplitude, double maxAmplitude) {
+    if (modeIndex < 0 || modeIndex >= numModes) {
+        std::ostringstream msg;
+        msg << "MultiModeCavityForce: modeIndex " << modeIndex << " out of range [0, " << numModes << ")";
+        throw OpenMMException(msg.str());
+    }
+    if (tTargetK <= 0)
+        throw OpenMMException("MultiModeCavityForce: tTargetK must be positive");
+    if (maxAmplitude <= minAmplitude)
+        throw OpenMMException("MultiModeCavityForce: maxAmplitude must be > minAmplitude");
+    modeGTargets[modeIndex] = gTarget;
+    modeTTargets[modeIndex] = tTargetK;
+    modeMinAmps[modeIndex] = minAmplitude;
+    modeMaxAmps[modeIndex] = maxAmplitude;
 }
 
 void MultiModeCavityForce::updateParametersInContext(Context& context) {

@@ -151,6 +151,7 @@ def buildKeywordDictionary(major_version_num=MAJOR_VERSION_NUM,
                                           "openmm.app.internal.pdbx",
                                           "openmm.app.internal.pdbx.reader",
                                           "openmm.app.internal.pdbx.writer",
+                                          "openmm.cavitymd",
                                           "openmmml",
                                           "openmmml.models"]
     setupKeywords["data_files"]        = []

@@ -229,11 +229,17 @@ public:
 #endif
     /// @endcond
     /**
-     * Get the lambda coupling value at a specific timestep.
-     * If no schedule is set, returns the default lambdaCoupling value.
-     * 
+     * Get the lambda coupling value at a specific timestep from the host-side
+     * coupling-on-step flag (if set), else from setLambdaCouplingSchedule (if non-empty),
+     * else the default lambdaCoupling constructor value.
+     *
+     * This does not evaluate setCouplingModulation: when CouplingModulationType is not
+     * ModulationNone, the effective coupling used during integration is derived from
+     * simulation time (and may override the schedule) in the platform kernels; that
+     * time-based value is not reflected here.
+     *
      * @param step  the timestep
-     * @return the lambda coupling value at that timestep
+     * @return the lambda coupling value at that timestep from the mechanisms above
      */
     double getLambdaCouplingAtStep(int step) const;
     /**

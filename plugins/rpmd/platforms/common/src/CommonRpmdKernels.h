@@ -5,7 +5,7 @@
  *                                   OpenMM                                   *
  * -------------------------------------------------------------------------- *
  * This is part of the OpenMM molecular simulation toolkit.                   *
- * See https://openmm.org/development.                                        *
+ * See https://openmm.org.                                        *
  *                                                                            *
  * Portions copyright (c) 2011-2021 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
@@ -44,7 +44,8 @@ namespace OpenMM {
 class CommonIntegrateRPMDStepKernel : public IntegrateRPMDStepKernel {
 public:
     CommonIntegrateRPMDStepKernel(const std::string& name, const Platform& platform, ComputeContext& cc) :
-            IntegrateRPMDStepKernel(name, platform), cc(cc), hasInitializedKernels(false) {
+            IntegrateRPMDStepKernel(name, platform), cc(cc), hasInitializedKernels(false),
+            useFFLKernels(false), useSuzukiChinBuffers(false) {
     }
     /**
      * Initialize the kernel.
@@ -83,21 +84,82 @@ public:
     void copyToContext(int copy, ContextImpl& context);
 private:
     void initializeKernels(ContextImpl& context);
-    void computeForces(ContextImpl& context);
+    /**
+     * @param forceGroupMask    bitmask of force groups to evaluate (intersected with contractions).
+     * @param allowSuzukiChin   if true and Suzuki–Chin is enabled, apply correction after a full evaluation.
+     */
+    void computeForces(ContextImpl& context, const RPMDIntegrator& integrator, int forceGroupMask, bool allowSuzukiChin);
+    void applySuzukiChinCorrection(ContextImpl& context, const RPMDIntegrator& integrator);
+    /**
+     * Download bead positions from GPU for batched force evaluation.
+     * 
+     * @param beadIndex    which bead to download (0 to numCopies-1)
+     * @param outPositions output vector to fill with positions
+     */
+    void downloadPositionsFromGPU(int beadIndex, std::vector<Vec3>& outPositions);
+    /**
+     * Upload bead forces to GPU after batched force evaluation.
+     * 
+     * @param beadIndex which bead to upload (0 to numCopies-1)
+     * @param inForces  input vector with forces
+     */
+    void uploadForcesToGPU(int beadIndex, const std::vector<Vec3>& inForces);
+    /**
+     * Upload all bead forces to GPU at once after batched force evaluation.
+     * This is more efficient than calling uploadForcesToGPU multiple times.
+     * 
+     * @param allBeadForces vector of force vectors for all beads [numCopies][numParticles]
+     */
+    void uploadAllForcesToGPU(const std::vector<std::vector<Vec3>>& allBeadForces);
+    /**
+     * Apply the Bussi stochastic velocity rescaling thermostat to the centroid mode.
+     * This is used for PILE_G mode where Bussi thermostat is applied to centroid only.
+     */
+    void applyBussiCentroidThermostat(const System& system, const RPMDIntegrator& integrator, double halfdt);
+    /**
+     * Apply the Bussi stochastic velocity rescaling thermostat to classical particles.
+     * This is used in hybrid mode for classical particle thermostating.
+     */
+    void applyBussiClassicalThermostat(const System& system, const RPMDIntegrator& integrator, double halfdt);
     std::string createFFT(int size, const std::string& variable, bool forward);
     ComputeContext& cc;
     bool hasInitializedKernels;
+    bool useFFLKernels;
+    bool useSuzukiChinBuffers;
     int numCopies, numParticles, workgroupSize;
     std::map<int, int> groupsByCopies;
     int groupsNotContracted;
     ComputeArray forces;
     ComputeArray positions;
     ComputeArray velocities;
+    ComputeArray savedVelocitiesFFL;
+    ComputeArray scForcePlus;
+    ComputeArray scForceMinus;
     ComputeArray contractedForces;
     ComputeArray contractedPositions;
-    ComputeKernel pileKernel, stepKernel, velocitiesKernel, copyToContextKernel, copyFromContextKernel, translateKernel;
+    ComputeArray centroidKE;
+    ComputeKernel pileKernel, stepKernel, velocitiesKernel, copyToContextKernel, copyFromContextKernel, addForcesFromContextKernel, translateKernel;
+    ComputeKernel computeCentroidKEKernel, applyBussiScalingKernel;
+    ComputeKernel saveVelocitiesFFLKernel, applyMomentumFlipFFLKernel, applySuzukiChinAccumulateKernel;
     std::map<int, ComputeKernel> positionContractionKernels;
     std::map<int, ComputeKernel> forceContractionKernels;
+    // Hybrid mode support: quantum vs classical particles (uniform memory layout)
+    // All particles stored with all beads; classical beads synced to stay identical
+    int numQuantumParticles, numClassicalParticles;
+    bool hybridMode;  // True if any classical particles exist
+    ComputeArray isQuantum;         // Per-particle: 1=quantum, 0=classical
+    std::vector<int> quantumParticleIndices;   // Original indices of quantum particles
+    std::vector<int> classicalParticleIndices; // Original indices of classical particles
+    
+    // Kernels for hybrid mode
+    ComputeArray classicalKE;  // For Bussi thermostat on classical particles
+    ComputeKernel pileKernelHybrid;  // PILE thermostat for quantum particles only
+    ComputeKernel stepKernelHybrid;  // Integration step (quantum: FFT, classical: Verlet)
+    ComputeKernel velocitiesKernelHybrid;  // Velocity update for all particles
+    ComputeKernel syncClassicalBeadsKernel;  // Sync bead 0 to beads 1..N-1 for classical particles
+    ComputeKernel applyClassicalThermostatKernel;  // Langevin for classical particles
+    ComputeKernel computeClassicalKEKernel;  // KE reduction for Bussi thermostat
+    ComputeKernel applyBussiClassicalScalingKernel;  // Bussi velocity scaling
 };
 
 } // namespace OpenMM

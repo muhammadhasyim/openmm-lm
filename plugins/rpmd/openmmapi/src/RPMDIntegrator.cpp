@@ -2,7 +2,7 @@
  *                                   OpenMM                                   *
  * -------------------------------------------------------------------------- *
  * This is part of the OpenMM molecular simulation toolkit.                   *
- * See https://openmm.org/development.                                        *
+ * See https://openmm.org.                                        *
  *                                                                            *
  * Portions copyright (c) 2008-2021 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
@@ -41,18 +41,24 @@ using namespace OpenMM;
 using namespace std;
 
 RPMDIntegrator::RPMDIntegrator(int numCopies, double temperature, double frictionCoeff, double stepSize, const map<int, int>& contractions) :
-        numCopies(numCopies), applyThermostat(true), contractions(contractions), forcesAreValid(false), hasSetPosition(false), hasSetVelocity(false), isFirstStep(true) {
+        numCopies(numCopies), applyThermostat(true), thermostatType(Pile), classicalThermostat(BussiClassical), contractions(contractions), 
+        defaultQuantum(true), forcesAreValid(false), hasSetPosition(false), hasSetVelocity(false), isFirstStep(true),
+        numInnerSteps(1), innerForceGroups(0x1), suzukiChinEnabled(false), suzukiChinEpsilon(0.001) {
     setTemperature(temperature);
     setFriction(frictionCoeff);
+    setCentroidFriction(frictionCoeff);  // Default centroid friction equals main friction
     setStepSize(stepSize);
     setConstraintTolerance(1e-5);
     setRandomNumberSeed(0);
 }
 
 RPMDIntegrator::RPMDIntegrator(int numCopies, double temperature, double frictionCoeff, double stepSize) :
-        numCopies(numCopies), applyThermostat(true), forcesAreValid(false), hasSetPosition(false), hasSetVelocity(false), isFirstStep(true) {
+        numCopies(numCopies), applyThermostat(true), thermostatType(Pile), classicalThermostat(BussiClassical), 
+        defaultQuantum(true), forcesAreValid(false), hasSetPosition(false), hasSetVelocity(false), isFirstStep(true),
+        numInnerSteps(1), innerForceGroups(0x1), suzukiChinEnabled(false), suzukiChinEpsilon(0.001) {
     setTemperature(temperature);
     setFriction(frictionCoeff);
+    setCentroidFriction(frictionCoeff);  // Default centroid friction equals main friction
     setStepSize(stepSize);
     setConstraintTolerance(1e-5);
     setRandomNumberSeed(0);
@@ -71,6 +77,7 @@ void RPMDIntegrator::initialize(ContextImpl& contextRef) {
 
 void RPMDIntegrator::cleanup() {
     kernel = Kernel();
+    // No file I/O here - cleanup() may be called during shutdown
 }
 
 void RPMDIntegrator::stateChanged(State::DataType changed) {
@@ -193,6 +200,74 @@ void RPMDIntegrator::step(int steps) {
         kernel.getAs<IntegrateRPMDStepKernel>().execute(*context, *this, forcesAreValid);
         forcesAreValid = true;
     }
+}
+
+const map<int, int>& RPMDIntegrator::getParticleTypes() const {
+    return particleType;
+}
+
+void RPMDIntegrator::setParticleType(int index, int type) {
+    particleType[index] = type;
+}
+
+const set<int>& RPMDIntegrator::getQuantumParticleTypes() const {
+    return quantumParticleTypes;
+}
+
+void RPMDIntegrator::setQuantumParticleTypes(const set<int>& types) {
+    quantumParticleTypes = types;
+}
+
+bool RPMDIntegrator::getDefaultQuantum() const {
+    return defaultQuantum;
+}
+
+void RPMDIntegrator::setDefaultQuantum(bool quantum) {
+    defaultQuantum = quantum;
+}
+
+RPMDIntegrator::ClassicalThermostatType RPMDIntegrator::getClassicalThermostat() const {
+    return classicalThermostat;
+}
+
+void RPMDIntegrator::setClassicalThermostat(ClassicalThermostatType type) {
+    classicalThermostat = type;
+}
+
+void RPMDIntegrator::setNumInnerSteps(int n) {
+    if (n < 1)
+        throw OpenMMException("RPMDIntegrator: numInnerSteps must be >= 1");
+    numInnerSteps = n;
+}
+
+int RPMDIntegrator::getNumInnerSteps() const {
+    return numInnerSteps;
+}
+
+void RPMDIntegrator::setInnerForceGroups(int groups) {
+    innerForceGroups = groups;
+}
+
+int RPMDIntegrator::getInnerForceGroups() const {
+    return innerForceGroups;
+}
+
+void RPMDIntegrator::setSuzukiChinEnabled(bool enable) {
+    suzukiChinEnabled = enable;
+}
+
+bool RPMDIntegrator::getSuzukiChinEnabled() const {
+    return suzukiChinEnabled;
+}
+
+void RPMDIntegrator::setSuzukiChinEpsilon(double epsilon) {
+    if (epsilon <= 0.0)
+        throw OpenMMException("RPMDIntegrator: Suzuki-Chin epsilon must be positive");
+    suzukiChinEpsilon = epsilon;
+}
+
+double RPMDIntegrator::getSuzukiChinEpsilon() const {
+    return suzukiChinEpsilon;
 }
 
 double RPMDIntegrator::getTotalEnergy() {

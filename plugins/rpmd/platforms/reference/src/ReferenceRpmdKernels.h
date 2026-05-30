@@ -5,7 +5,7 @@
  *                                   OpenMM                                   *
  * -------------------------------------------------------------------------- *
  * This is part of the OpenMM molecular simulation toolkit.                   *
- * See https://openmm.org/development.                                        *
+ * See https://openmm.org.                                        *
  *                                                                            *
  * Portions copyright (c) 2011-2022 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
@@ -33,6 +33,8 @@
 #include "ReferencePlatform.h"
 #include "openmm/RpmdKernels.h"
 #include "openmm/Vec3.h"
+#include <map>
+#include <vector>
 
 namespace OpenMM {
 
@@ -82,6 +84,14 @@ public:
     void copyToContext(int copy, ContextImpl& context);
 private:
     void computeForces(ContextImpl& context, const RPMDIntegrator& integrator);
+    void computeForcesWithMask(ContextImpl& context, const RPMDIntegrator& integrator, int groupMask);
+    /**
+     * Apply the Bussi stochastic velocity rescaling thermostat to the centroid mode.
+     * This is used for PILE_G mode where Bussi thermostat is applied to centroid only.
+     */
+    void applyBussiCentroidThermostat(const System& system, const RPMDIntegrator& integrator,
+                                       int numCopies, int numParticles, double scale,
+                                       double nkT, double c1);
     std::vector<std::vector<Vec3> > positions;
     std::vector<std::vector<Vec3> > velocities;
     std::vector<std::vector<Vec3> > forces;
@@ -89,6 +99,8 @@ private:
     std::vector<std::vector<Vec3> > contractedForces;
     std::map<int, int> groupsByCopies;
     int groupsNotContracted;
+    std::vector<bool> isQuantumParticle;
+    bool hybridMode;
 };
 
 } // namespace OpenMM

@@ -1,0 +1,6 @@
+[submodule "cav-hoomd"]
+	path = cav-hoomd
+	url = https://github.com/muhammadhasyim/cav-hoomd.git
+[submodule "i-pi"]
+	path = i-pi
+	url = https://github.com/i-pi/i-pi.git

@@ -193,6 +193,9 @@ def assign_force_groups(system, include_dipole_self_energy: bool = True) -> Dict
         elif isinstance(force, openmm.NonbondedForce):
             force.setForceGroup(0)
             group_map["nonbonded"] = 0
+        elif isinstance(force, openmm.CustomNonbondedForce):
+            force.setForceGroup(7)
+            group_map["lj"] = 7
         elif isinstance(force, openmm.CavityForce):
             force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
             force.setForceGroup(2)

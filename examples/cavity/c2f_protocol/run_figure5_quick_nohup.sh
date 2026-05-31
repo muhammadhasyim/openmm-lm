@@ -6,6 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$ROOT"
 
+export OPENMM_PLUGIN_DIR="${OPENMM_PLUGIN_DIR:-$ROOT/.pixi/envs/test/lib/plugins}"
+
 LOG_DIR="$ROOT/examples/cavity/c2f_protocol/fig5_output"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/nohup_quick.log"
@@ -30,7 +32,7 @@ if [[ -d "$CAVDIR" ]]; then
 fi
 
 # Ensure CUDA plugin matches driver (ignore failure on CPU-only hosts)
-pixi run -e test fix-cuda >> "$LOG_FILE" 2>&1 || true
+CONDA_PREFIX="$ROOT/.pixi/envs/test" bash "$ROOT/scripts/rebuild_cuda_plugin.sh" >> "$LOG_FILE" 2>&1 || true
 
 # Clean stale quick-run outputs
 rm -f "$LOG_DIR"/fig5_calibration.txt
@@ -39,7 +41,7 @@ rm -f "$LOG_DIR"/fig5_averaged.csv
 rm -f "$LOG_DIR"/Figure5b_reproduced.png "$LOG_DIR"/Figure5b_reproduced.pdf
 
 echo "--- reproduce_figure5.py --quick ---" | tee -a "$LOG_FILE"
-pixi run -e test python examples/cavity/c2f_protocol/reproduce_figure5.py --quick >> "$LOG_FILE" 2>&1
+OPENMM_PLUGIN_DIR="$OPENMM_PLUGIN_DIR" pixi run -e test python -u examples/cavity/c2f_protocol/reproduce_figure5.py --quick >> "$LOG_FILE" 2>&1
 
 echo "--- plot_figure5.py ---" | tee -a "$LOG_FILE"
 pixi run -e test python examples/cavity/c2f_protocol/plot_figure5.py \

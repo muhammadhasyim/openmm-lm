@@ -1,0 +1,11 @@
+lambda=0.09
+period_ps=10.0
+duty_cycle=0.1
+coupling_start_ps=10.0
+initial_T_K=300.0
+runtime_ps=80.0
+n_traj=3
+diffeq_tau_ps=1.0
+calibration_file=fig5_openmm_calibration.txt
+averaged_csv=fig5_averaged.csv
+reference_traj_dir=/home/mh7373/GitRepos/cav-hoomd/examples/square_lambda0.09_diffeq_recalib

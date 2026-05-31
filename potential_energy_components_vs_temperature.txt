@@ -1,0 +1,10 @@
+# Potential energy component calibration for fictive temperatures
+# NVT equilibration + production; energies averaged over production samples
+# Units: Hartree. intramolecular == harmonic bond energy (mKA diatomics).
+# lj_hartree holds combined LJ+Coulomb (OpenMM NonbondedForce+PME).
+#
+# temperature avg_temperature n_samples n_frames_production total_PE_hartree total_PE_std_hartree harmonic_hartree harmonic_std_hartree intramolecular_hartree intramolecular_std_hartree lj_hartree lj_std_hartree coulombic_hartree coulombic_std_hartree
+temperature avg_temperature n_samples n_frames_production total_PE_hartree total_PE_std_hartree harmonic_hartree harmonic_std_hartree intramolecular_hartree intramolecular_std_hartree lj_hartree lj_std_hartree coulombic_hartree coulombic_std_hartree
+400.000000 397.833736 50 50 -0.5040970540 0.0243640112 0.1222524413 0.0132395004 0.1222524413 0.0132395004 -0.6263494954 0.0218915717 0.0000000000 0.0000000000
+240.000000 238.873152 50 50 -0.7447861571 0.0184151949 0.0837102142 0.0059226996 0.0837102142 0.0059226996 -0.8284963713 0.0157669957 0.0000000000 0.0000000000
+80.000000 79.989297 50 50 -1.5143112351 0.0213054987 0.0144317562 0.0010923860 0.0144317562 0.0010923860 -1.5287429913 0.0209908565 0.0000000000 0.0000000000

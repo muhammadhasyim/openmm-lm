@@ -48,19 +48,32 @@ from run_c2f import (  # noqa: E402
 # Figure 5 defaults (Methods + Fig. 5 caption + SI Section 5 + cav-hoomd square_wave_diffeq.sh)
 FIG5_INITIAL_T_K = 300.0
 FIG5_LAMBDA = 0.09
-FIG5_COUPLING_START_PS = 20.0
+# Coupling + DiffEq turn on at 10 ps to match cav-hoomd Figure 5 (Finite-q: False).
+FIG5_COUPLING_START_PS = 10.0
 FIG5_PERIOD_PS = 10.0
 FIG5_DUTY_CYCLE = 0.10
 FIG5_FEEDBACK_INTERVAL_PS = 0.01  # Controller update interval (cav-hoomd diffeq default)
 FIG5_CSV_INTERVAL_PS = 0.1  # CSV sample interval; bath feedback on each λ-off window (forced)
 FIG5_RUNTIME_PS = 150.0
 FIG5_N_TRAJ = 500
-FIG5_EQUIL_PS = 100.0
+FIG5_EQUIL_PS = 200.0
+FIG5_MAX_PRE_EQUIL_PS = 1000.0
+FIG5_POST_CAVITY_EQUIL_PS = 0.0
+FIG5_OPENMM_CALIBRATION_NAME = "fig5_openmm_calibration.txt"
+FIG5_TS_BIAS_MAX_K = 10.0
+FIG5_MAX_POST_EQUIL_PS = 500.0
 FIG5_CALIBRATION_RUN_PS = 500.0
 FIG5_DIFFEQ_TAU_PS = 1.0
-FIG5_T_MIN = 0.1
+FIG5_T_MIN = 0.01
+# Faithful cav-hoomd Figure 5: q≈0 photon (no displacement) + every-step
+# instantaneous T_s feedback (--diffeq-update-interval 0).
+FIG5_FINITE_Q = False
+FIG5_FEEDBACK_EVERY_STEP = True
 FIG5_CALIBRATION_TEMPS = np.array(
     [30, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500], dtype=float
+)
+FIG5_QUICK_CALIBRATION_TEMPS = np.array(
+    [50, 100, 200, 300, 400, 500], dtype=float
 )
 FIG5_BASE_SEED = 42
 
@@ -191,12 +204,17 @@ def main():
     )
     args = parser.parse_args()
 
+    max_pre_equil_ps = FIG5_MAX_PRE_EQUIL_PS
     if args.quick:
         args.n_traj = 3
         args.runtime_ps = 80.0
-        args.calibration_run_ps = 50.0
-        args.equil_ps = 50.0
-        print("Quick mode: n_traj=3, runtime=80 ps, equil-ps=50 (reference calibration)")
+        args.calibration_run_ps = 300.0
+        args.equil_ps = 100.0
+        max_pre_equil_ps = 250.0
+        print(
+            f"Quick mode: n_traj=3, runtime=80 ps, equil-ps={args.equil_ps}, "
+            f"OpenMM-native calibration for T_s/T_v"
+        )
 
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -209,37 +227,43 @@ def main():
     if not cal_file.is_absolute():
         cal_file = (_SCRIPT_DIR / cal_file).resolve()
 
-    # ---- Stage A: calibration (reference by default) ----
+    openmm_cal = output_dir / FIG5_OPENMM_CALIBRATION_NAME
+
+    # ---- Stage A: calibration ----
     if not args.skip_simulation:
-        if args.run_self_calibration:
-            self_cal = output_dir / f"{args.output_prefix}_self_calibration.txt"
-
-            def _make_system(T):
-                return build_mka_system(
-                    seed=args.base_seed, sample_bonds_at_T=T
-                )
-
-            run_equilibrium_calibration(
-                _make_system,
-                FIG5_CALIBRATION_TEMPS,
-                run_ps=args.calibration_run_ps,
-                dt_ps=args.dt_ps,
-                output_file=str(self_cal),
-                platform_name=args.platform,
-            )
-            validate_calibration_file(self_cal)
-            if REFERENCE_CALIBRATION_FILE.exists():
-                crosscheck_calibration_against_reference(
-                    self_cal, REFERENCE_CALIBRATION_FILE
-                )
-        elif not cal_file.exists():
-            raise FileNotFoundError(
-                f"Reference calibration not found: {cal_file}\n"
-                "Copy from cav-hoomd or run with --run-self-calibration."
-            )
-        else:
-            print(f"Using reference calibration: {cal_file}")
+        if args.calibration_file:
+            if not cal_file.exists():
+                raise FileNotFoundError(f"Calibration file not found: {cal_file}")
+            print(f"Using user calibration: {cal_file}")
             validate_calibration_file(cal_file)
+        else:
+            if not openmm_cal.exists():
+                print(f"\n=== OpenMM-native calibration -> {openmm_cal.name} ===")
+
+                def _make_system(T):
+                    return build_mka_system(
+                        seed=args.base_seed, sample_bonds_at_T=T
+                    )
+
+                cal_temps = (
+                    FIG5_QUICK_CALIBRATION_TEMPS if args.quick else FIG5_CALIBRATION_TEMPS
+                )
+                run_equilibrium_calibration(
+                    _make_system,
+                    cal_temps,
+                    run_ps=args.calibration_run_ps,
+                    dt_ps=args.dt_ps,
+                    output_file=str(openmm_cal),
+                    platform_name=args.platform,
+                )
+                validate_calibration_file(openmm_cal)
+                if REFERENCE_CALIBRATION_FILE.exists():
+                    crosscheck_calibration_against_reference(
+                        openmm_cal, REFERENCE_CALIBRATION_FILE
+                    )
+            else:
+                print(f"Using cached OpenMM calibration: {openmm_cal}")
+            cal_file = openmm_cal
 
         # ---- Stage B: per-seed C2F production ----
         print(f"\n=== Running {args.n_traj} C2F trajectories ===")
@@ -268,10 +292,16 @@ def main():
                 T_min=FIG5_T_MIN,
                 lambda_profile="square",
                 equil_ps=args.equil_ps,
+                post_cavity_equil_ps=FIG5_POST_CAVITY_EQUIL_PS,
+                ts_bias_max_K=FIG5_TS_BIAS_MAX_K,
+                max_post_equil_ps=FIG5_MAX_POST_EQUIL_PS,
+                max_pre_equil_ps=max_pre_equil_ps,
                 output_prefix=str(output_dir / prefix),
                 seed=seed,
                 platform_name=args.platform,
                 log_dt=args.quick,
+                finite_q=FIG5_FINITE_Q,
+                feedback_every_step=FIG5_FEEDBACK_EVERY_STEP,
             )
 
     # ---- Stage C: ensemble average ----

@@ -217,7 +217,18 @@ def plot_figure5b(
         ha="right", fontsize=9, color="#666666",
     )
     ax1.set_ylabel("Temperature (K)")
-    ax1.set_ylim(0, 350)
+    temp_vals = np.concatenate([
+        T_s[np.isfinite(T_s)],
+        T_bath[np.isfinite(T_bath)],
+    ])
+    if ref_data is not None:
+        temp_vals = np.concatenate([
+            temp_vals,
+            ref_data["T_s_fictive_K"][np.isfinite(ref_data["T_s_fictive_K"])],
+            ref_data["T_bath_K"][np.isfinite(ref_data["T_bath_K"])],
+        ])
+    y_max = float(np.nanmax(temp_vals)) if temp_vals.size else 350.0
+    ax1.set_ylim(0, max(350.0, y_max * 1.05))
     ax1.legend(loc="upper right", frameon=False, fontsize=9)
 
     # --- Bottom: T_v ---

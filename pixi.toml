@@ -197,6 +197,30 @@ install-ml = "pip install -e openmm-ml"
 smoke-ml = "python -c \"import openmmml; from openmmml import CavitySpec; print('openmmml OK')\""
 test-ml-cavity = "python -m pytest -q openmm-ml/test/TestCavityMLIP.py"
 
+# Full ML stack for CACE/MACE/AIMNet2 integration tests and parity runs.
+# Includes cace (LES-BEC water model) and fetch/test tasks for real cavity validation.
+[feature.ml-full.dependencies]
+python = ">=3.11,<3.14"
+pip = "*"
+pytorch = ">=2.2"
+ase = "*"
+
+[feature.ml-full.pypi-dependencies]
+openmmml = { path = "openmm-ml", editable = true }
+fairchem-core = "*"
+mace-torch = "*"
+cace = "*"
+
+[feature.ml-full.tasks]
+install-ml-full = "pip install -e openmm-ml && pip install fairchem-core mace-torch cace || true"
+# Fetch the LES-BEC water model submodule and export the checkpoint path.
+# Usage: pixi run -e ml-full fetch-les-bec
+fetch-les-bec = { cmd = "git submodule update --init LES-BEC && export OPENMMML_LES_BEC_WATER_MODEL=$(pwd)/LES-BEC/water/fit/fit_version_4/best_model.pth && echo \"Set OPENMMML_LES_BEC_WATER_MODEL=$OPENMMML_LES_BEC_WATER_MODEL\"" }
+# Run real CACE+cavity trajectory tests (requires LES-BEC checkpoint via fetch-les-bec).
+test-ml-cavity-real = { cmd = "python -m pytest -v tests/cavity_mlip/test_cace_cavity_trajectory.py", depends-on = ["fetch-les-bec"] }
+# Full ML test suite (unit + RPMD + real CACE trajectory).
+test-ml-full = "python -m pytest -q openmm-ml/test/TestCavityMLIP.py tests/rpmd/test_rpmd_cavity_integration.py tests/cavity_mlip/"
+
 [feature.docs.dependencies]
 sphinx = "*"
 doxygen = "*"
@@ -208,4 +232,5 @@ docs = "echo 'Run sphinx from build/docs-source after configuring with -DOPENMM_
 default = { features = [] }
 test = { features = ["test"] }
 ml = { features = ["ml", "test"] }
+ml-full = { features = ["ml-full", "test"] }
 docs = { features = ["docs"] }

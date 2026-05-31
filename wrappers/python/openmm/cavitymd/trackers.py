@@ -105,14 +105,24 @@ class EnergyTracker:
             mask |= (1 << gid)
         return mask if mask != 0 else 0xFFFFFFFF
 
+    def _group_potential_kjmol(self, group_id: int) -> Optional[float]:
+        """Potential energy (kJ/mol) for a single force group, or None on failure."""
+        from openmm import unit
+
+        try:
+            state = self._context.getState(getEnergy=True, groups={group_id})
+            return state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+        except Exception:
+            return None
+
     def get_energies(self) -> Dict[str, float]:
         """Return energy components in kJ/mol.
 
-        Makes exactly ONE ``getState(getEnergy=True)`` call.  Per-group
-        energies are obtained by individual force-group queries only when
-        multiple groups are tracked; otherwise the total suffices.
-        Cavity sub-components use cached C++ reads (zero GPU cost).
-        Kinetic energy comes from the integrator (no velocity download).
+        LJ+Coulomb (``nonbonded``) is read from the NonbondedForce group when
+        available (matches cav-hoomd ``lj + coulombic``).  Harmonic bond energy
+        prefers the HarmonicBondForce group for consistency with ``total_pe``.
+        Falls back to explicit bond summation / residual subtraction if group
+        queries fail (e.g. CUDA PTX JIT unavailable).
         """
         from openmm import unit
 
@@ -133,9 +143,9 @@ class EnergyTracker:
         )
 
         system = self._context.getSystem()
-        result["harmonic_bond"] = compute_harmonic_bond_energy_kjmol(
-            self._context, system
-        )
+
+        harmonic_pe = compute_harmonic_bond_energy_kjmol(self._context, system)
+        result["harmonic_bond"] = harmonic_pe
 
         cav_harmonic = cav_coupling = cav_dse = 0.0
         if self._cavity_force is not None:
@@ -159,25 +169,38 @@ class EnergyTracker:
             result["cavity_coupling"] = cav_coupling
             result["cavity_dipole_self"] = cav_dse
 
-        # LJ+Coulomb: read NonbondedForce group directly (matches cav-hoomd
-        # energy_tracker lj + coulombic). Residual subtraction injects bias when
-        # cavity/thermostat terms do not decompose cleanly from total PE.
+        # LJ+Coulomb (T_s signal).  LJ lives in a CustomNonbondedForce group and
+        # Coulomb in the NonbondedForce (PME) group; sum both to match cav-hoomd
+        # ``lj + coulombic``.  Fall back to residual subtraction if either group
+        # query fails (e.g. CUDA PTX JIT unavailable).
+        coul_pe = None
         if "nonbonded" in self._group_map:
-            nb_group = self._group_map["nonbonded"]
-            state_nb = self._context.getState(
-                getEnergy=True, groups={nb_group}
-            )
-            result["nonbonded"] = state_nb.getPotentialEnergy().value_in_unit(
-                unit.kilojoule_per_mole
-            )
+            coul_pe = self._group_potential_kjmol(self._group_map["nonbonded"])
+        lj_pe = None
+        if "lj" in self._group_map:
+            lj_pe = self._group_potential_kjmol(self._group_map["lj"])
+
+        nb_sub = (
+            total_pe
+            - result["harmonic_bond"]
+            - cav_harmonic
+            - cav_coupling
+            - cav_dse
+        )
+        if coul_pe is not None and lj_pe is not None:
+            result["coulombic"] = coul_pe
+            result["lj"] = lj_pe
+            result["nonbonded"] = lj_pe + coul_pe
+            result["lj_coulombic"] = lj_pe + coul_pe
+            result["nonbonded_subtracted"] = nb_sub
+        elif coul_pe is not None:
+            # Single combined NonbondedForce (legacy layout) or LJ unavailable.
+            result["nonbonded"] = coul_pe
+            result["lj_coulombic"] = coul_pe
+            result["nonbonded_subtracted"] = nb_sub
         else:
-            result["nonbonded"] = (
-                total_pe
-                - result["harmonic_bond"]
-                - cav_harmonic
-                - cav_coupling
-                - cav_dse
-            )
+            result["nonbonded"] = nb_sub
+            result["lj_coulombic"] = nb_sub
 
         # Molecular vs cavity KE: use equipartition estimate (3/2 kT per DOF)
         # instead of downloading all velocities.  For a single cavity particle

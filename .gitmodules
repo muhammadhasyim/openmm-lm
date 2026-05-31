@@ -7,3 +7,7 @@
 [submodule "openmm-ml"]
 	path = openmm-ml
 	url = https://github.com/muhammadhasyim/openmm-ml
+
+[submodule "LES-BEC"]
+	path = LES-BEC
+	url = https://github.com/BingqingCheng/LES-BEC.git

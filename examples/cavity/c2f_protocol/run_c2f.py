@@ -173,10 +173,40 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
     )
 
     bond_force = openmm.HarmonicBondForce()
-    nb_force = openmm.NonbondedForce()
-    nb_force.setNonbondedMethod(openmm.NonbondedForce.PME)
-    nb_force.setCutoffDistance(rcut_nm)
-    nb_force.setUseDispersionCorrection(False)  # shifted potential, no tail correction
+
+    # Coulomb-only NonbondedForce (PME).  LJ is handled by a separate
+    # CustomNonbondedForce below so that the A-B cross terms obey a proper
+    # cutoff + energy shift (cav-hoomd uses pair.LJ(mode='shift')) rather than
+    # the cutoff-free, PME-excluding NonbondedForce exceptions used previously.
+    coulomb_force = openmm.NonbondedForce()
+    coulomb_force.setNonbondedMethod(openmm.NonbondedForce.PME)
+    coulomb_force.setCutoffDistance(rcut_nm)
+    coulomb_force.setUseDispersionCorrection(False)
+
+    # All Lennard-Jones (AA/BB/AB) via Kob-Andersen non-additive sigma/eps.
+    # Energy is shifted to zero at r_cut to match cav-hoomd mode='shift'.
+    eps_aa, sig_aa = _au_to_openmm_lj(EPS_AA_AU, SIG_AA_AU)
+    eps_bb, sig_bb = _au_to_openmm_lj(EPS_BB_AU, SIG_BB_AU)
+    eps_ab, sig_ab = _au_to_openmm_lj(EPS_AB_AU, SIG_AB_AU)
+    lj_force = openmm.CustomNonbondedForce(
+        "lj - ljcut;"
+        "lj = 4*eps*((sig/r)^12 - (sig/r)^6);"
+        "ljcut = 4*eps*((sig/rc)^12 - (sig/rc)^6);"
+        "eps = epsfun(type1, type2);"
+        "sig = sigfun(type1, type2)"
+    )
+    lj_force.addPerParticleParameter("type")
+    lj_force.addGlobalParameter("rc", rcut_nm)
+    # type index: 0 = A ("O"), 1 = B ("N"); table is row-major f(t1,t2)=v[t1+2*t2]
+    lj_force.addTabulatedFunction(
+        "epsfun", openmm.Discrete2DFunction(2, 2, [eps_aa, eps_ab, eps_ab, eps_bb])
+    )
+    lj_force.addTabulatedFunction(
+        "sigfun", openmm.Discrete2DFunction(2, 2, [sig_aa, sig_ab, sig_ab, sig_bb])
+    )
+    lj_force.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic)
+    lj_force.setCutoffDistance(rcut_nm)
+    lj_force.setUseLongRangeCorrection(False)
 
     positions = []
     num_aa = int(frac_aa * num_molecules)
@@ -185,12 +215,8 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
 
     k_aa, r0_aa = _au_to_openmm_bond(K_AA_AU, R0_AA_AU)
     k_bb, r0_bb = _au_to_openmm_bond(K_BB_AU, R0_BB_AU)
-    eps_aa, sig_aa = _au_to_openmm_lj(EPS_AA_AU, SIG_AA_AU)
-    eps_bb, sig_bb = _au_to_openmm_lj(EPS_BB_AU, SIG_BB_AU)
-    eps_ab, sig_ab = _au_to_openmm_lj(EPS_AB_AU, SIG_AB_AU)
 
-    a_indices = []  # (particle_index, charge)
-    b_indices = []
+    bonded_pairs = []  # (idx1, idx2) excluded from both LJ and Coulomb
 
     mol_idx = 0
     for i in range(side):
@@ -212,10 +238,10 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
 
                 if is_aa:
                     mass, r0, k_bond = MASS_A, r0_aa, k_aa
-                    sig, eps = sig_aa, eps_aa
+                    atom_type = 0
                 else:
                     mass, r0, k_bond = MASS_B, r0_bb, k_bb
-                    sig, eps = sig_bb, eps_bb
+                    atom_type = 1
 
                 center = np.array([cx, cy, cz])
                 if sample_bonds_at_T is not None and sample_bonds_at_T > 0:
@@ -237,16 +263,11 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
                 bond_force.addBond(idx1, idx2, r0, k_bond)
 
                 q1, q2 = -CHARGE_MAG, +CHARGE_MAG
-                nb_force.addParticle(q1, sig, eps)
-                nb_force.addParticle(q2, sig, eps)
-                nb_force.addException(idx1, idx2, 0.0, 1.0, 0.0)
-
-                if is_aa:
-                    a_indices.append((idx1, q1))
-                    a_indices.append((idx2, q2))
-                else:
-                    b_indices.append((idx1, q1))
-                    b_indices.append((idx2, q2))
+                coulomb_force.addParticle(q1, 1.0, 0.0)
+                coulomb_force.addParticle(q2, 1.0, 0.0)
+                lj_force.addParticle([float(atom_type)])
+                lj_force.addParticle([float(atom_type)])
+                bonded_pairs.append((idx1, idx2))
 
                 mol_idx += 1
             if mol_idx >= num_molecules:
@@ -254,16 +275,23 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
         if mol_idx >= num_molecules:
             break
 
-    # Kob-Andersen non-additive A-B cross-terms
-    n_cross = 0
-    for idx_a, q_a in a_indices:
-        for idx_b, q_b in b_indices:
-            nb_force.addException(idx_a, idx_b, q_a * q_b, sig_ab, eps_ab)
-            n_cross += 1
-    print(f"Added {n_cross} A-B cross-term exceptions")
+    # Bonded exclusions (cav-hoomd nlist exclusions=('bond',)) on both LJ and
+    # Coulomb.  A-B cross terms are now ordinary cutoff LJ pairs (the
+    # CustomNonbondedForce tabulated rules), exactly as in cav-hoomd.
+    for idx1, idx2 in bonded_pairs:
+        coulomb_force.addException(idx1, idx2, 0.0, 1.0, 0.0)
+        lj_force.addExclusion(idx1, idx2)
+
+    # Confine LJ to molecular atoms; the photon (added later) stays
+    # non-interacting because it never joins this interaction group.
+    mol_atoms = set(range(system.getNumParticles()))
+    lj_force.addInteractionGroup(mol_atoms, mol_atoms)
+    print(f"LJ: CustomNonbondedForce (KA non-additive, shifted, r_cut={rcut_nm:.4f} nm), "
+          f"{len(bonded_pairs)} bonded exclusions")
 
     system.addForce(bond_force)
-    system.addForce(nb_force)
+    system.addForce(coulomb_force)
+    system.addForce(lj_force)
 
     num_mol_particles = system.getNumParticles()
     print(f"Built mKA system: {num_mol_particles} atoms "
@@ -284,6 +312,10 @@ def add_cavity_particle(system, positions):
             force.addParticle(0.0, 0.1, 0.0)
             for i in range(cavity_index):
                 force.addException(cavity_index, i, 0.0, 0.1, 0.0)
+        elif isinstance(force, openmm.CustomNonbondedForce):
+            # Photon needs a per-particle parameter; it is excluded from LJ via
+            # the molecular-only interaction group, so the value is irrelevant.
+            force.addParticle([0.0])
     return cavity_index
 
 
@@ -301,16 +333,21 @@ def initialize_cavity_position(context, cavity_index, temperature_K, omegac_au):
 
 def equilibrate_nvt(seed, temperature_K, equil_ps, dt_ps=0.001,
                     platform_name=None, minimize_steps=100,
-                    sample_bonds_at_T=None):
-    """Short NVT equilibration on a standalone system (no cavity).
+                    sample_bonds_at_T=None, calibration_file=None,
+                    ts_bias_max_K=10.0, max_equil_ps=None, chunk_ps=50.0):
+    """NVT pre-equilibration on a standalone system (no cavity).
 
     Builds a fresh mKA system, equilibrates, and returns final positions.
-    The production system is built separately to avoid duplicate thermostats.
+    When *calibration_file* is set, extends equil in *chunk_ps* steps until
+    |T_s − T_bath| ≤ *ts_bias_max_K* or *max_equil_ps* is reached.
     """
-    if equil_ps <= 0:
+    if equil_ps <= 0 and max_equil_ps is None:
         return None
 
-    print(f"\n--- NVT pre-equilibration at T={temperature_K:.0f} K for {equil_ps:.1f} ps ---")
+    target_ps = max_equil_ps if max_equil_ps is not None else equil_ps
+    print(f"\n--- NVT pre-equilibration at T={temperature_K:.0f} K "
+          f"(target {target_ps:.1f} ps) ---")
+
     system, positions, n_atoms = build_mka_system(
         seed=seed, sample_bonds_at_T=sample_bonds_at_T or temperature_K
     )
@@ -322,7 +359,7 @@ def equilibrate_nvt(seed, temperature_K, equil_ps, dt_ps=0.001,
     for idx in mol_indices:
         bussi.addParticle(idx)
     system.addForce(bussi)
-    assign_force_groups(system)
+    group_map = assign_force_groups(system)
 
     integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
     platform = _select_platform(platform_name)
@@ -333,15 +370,110 @@ def equilibrate_nvt(seed, temperature_K, equil_ps, dt_ps=0.001,
     if minimize_steps > 0:
         openmm.LocalEnergyMinimizer.minimize(context, maxIterations=minimize_steps)
 
-    n_steps = max(1, int(equil_ps / dt_ps))
-    integrator.step(n_steps)
+    temp_tracker = None
+    energy_tracker = None
+    if calibration_file is not None:
+        empirical_structural = EmpiricalTemperatureData(
+            calibration_file, energy_component="lj_coulombic"
+        )
+        empirical_harmonic = EmpiricalTemperatureData(
+            calibration_file, energy_component="harmonic"
+        )
+        energy_tracker = EnergyTracker(context, None, group_map, n_atoms)
+        temp_tracker = TemperatureTracker(
+            energy_tracker,
+            num_molecular_particles=n_atoms,
+            num_molecules=NUM_MOL,
+            empirical_structural=empirical_structural,
+            empirical_harmonic=empirical_harmonic,
+        )
 
-    state = context.getState(getPositions=True)
-    equil_positions = list(state.getPositions())
-    print(f"  Pre-equilibration complete ({n_steps} steps)")
+    best_abs_bias = float("inf")
+    best_positions = None
+    equil_done = 0.0
+
+    while equil_done < target_ps:
+        run_ps = min(chunk_ps, target_ps - equil_done)
+        if run_ps <= 0:
+            break
+        n_steps = max(1, int(run_ps / dt_ps))
+        integrator.step(n_steps)
+        equil_done += run_ps
+
+        if temp_tracker is None:
+            continue
+
+        energy_tracker._cached = None
+        energy_tracker._cached_step = -1
+        T_s = temp_tracker.get_all().get("structural_fictive")
+        if T_s is None:
+            continue
+        bias = T_s - temperature_K
+        print(f"  After {equil_done:.1f} ps: T_s={T_s:.1f} K (bias {bias:+.1f} K vs bath)")
+        if abs(bias) < best_abs_bias:
+            best_abs_bias = abs(bias)
+            best_positions = list(context.getState(getPositions=True).getPositions())
+        if abs(bias) <= ts_bias_max_K:
+            print(f"  Pre-equilibration converged (|bias| ≤ {ts_bias_max_K:.0f} K)")
+            break
+
+    if best_positions is not None and best_abs_bias > ts_bias_max_K:
+        context.setPositions(best_positions)
+        print(
+            f"  Restored best pre-equil state (|T_s bias|={best_abs_bias:.1f} K "
+            f"vs target < {ts_bias_max_K:.0f} K)"
+        )
+
+    equil_positions = list(context.getState(getPositions=True).getPositions())
+    print(f"  Pre-equilibration complete ({equil_done:.1f} ps)")
 
     del context, integrator
     return equil_positions
+
+
+def _post_cavity_equilibrate(context, integrator, thermostat, dt_ps, equil_ps):
+    """NVT equilibration on the production system (λ=0, cavity present)."""
+    if equil_ps <= 0:
+        return
+    n_steps = max(1, int(equil_ps / dt_ps))
+    chunk = max(1, min(5000, n_steps))
+    done = 0
+    while done < n_steps:
+        steps = min(chunk, n_steps - done)
+        integrator.step(steps)
+        thermostat.apply_cavity_thermostat_step(dt_ps * steps)
+        done += steps
+    print(f"  Post-cavity NVT equilibration complete ({n_steps} steps, {equil_ps:.1f} ps)")
+
+
+def _mean_structural_T_s(
+    context,
+    integrator,
+    thermostat,
+    temp_tracker,
+    energy_tracker,
+    dt_ps,
+    window_ps=10.0,
+    sample_ps=1.0,
+):
+    """Average T_s over a short trailing window to reduce single-frame noise."""
+    if window_ps <= 0:
+        energy_tracker._cached = None
+        energy_tracker._cached_step = -1
+        return temp_tracker.get_all().get("structural_fictive")
+
+    n_samples = max(1, int(round(window_ps / sample_ps)))
+    step_chunk = max(1, int(sample_ps / dt_ps))
+    values = []
+    for _ in range(n_samples):
+        integrator.step(step_chunk)
+        thermostat.apply_cavity_thermostat_step(sample_ps)
+        energy_tracker._cached = None
+        energy_tracker._cached_step = -1
+        T_s = temp_tracker.get_all().get("structural_fictive")
+        if T_s is not None:
+            values.append(T_s)
+    return float(np.mean(values)) if values else None
 
 
 # ===================================================================
@@ -377,14 +509,35 @@ def run_c2f(
     T_min: float = 0.1,
     T_max: Optional[float] = None,
     equil_ps: float = 20.0,
+    post_cavity_equil_ps: float = 0.0,
+    ts_bias_max_K: float = 10.0,
+    max_post_equil_ps: float = 200.0,
+    max_pre_equil_ps: Optional[float] = None,
     output_prefix: str = "c2f",
     seed: int = 42,
     include_dipole_self_energy: bool = True,
     platform_name=None,
     adaptive: bool = True,
     log_dt: bool = False,
+    finite_q: bool = True,
+    feedback_every_step: bool = False,
 ):
-    """Run the full C2F protocol with SI-accurate adaptive integration."""
+    """Run the full C2F protocol with SI-accurate adaptive integration.
+
+    Parameters
+    ----------
+    finite_q : bool
+        When True (default), the photon is displaced to its equilibrium
+        ``q_eq = -(λ/ω_c)d`` on each rising λ edge.  For a faithful cav-hoomd
+        Figure 5 reproduction set ``finite_q=False`` (q≈0 mode): the photon is
+        never displaced so the sudden λ quench delivers the ultrastrong-coupling
+        kick (a large T_v spike).
+    feedback_every_step : bool
+        When True, the bath feedback runs at every sample on the *instantaneous*
+        T_s with no λ-off-window gating (matches cav-hoomd
+        ``--diffeq-update-interval 0``).  When False, feedback updates once per
+        period from the mean λ-off T_s.
+    """
     print("\n=== Stage 3: C2F production run ===")
     print(f"  T_initial        = {initial_temperature_K} K")
     print(f"  ω_c              = {cavity_freq_cm1} cm⁻¹")
@@ -398,7 +551,8 @@ def run_c2f(
     if sample_interval_ps is None:
         sample_interval_ps = feedback_interval_ps
     print(f"  sample interval  = {sample_interval_ps} ps")
-    print(f"  pre-equil        = {equil_ps} ps")
+    print(f"  pre-equil        = {equil_ps} ps (max {max_pre_equil_ps or equil_ps:.1f} ps)")
+    print(f"  post-cavity equil= {post_cavity_equil_ps} ps (max {max_post_equil_ps} ps)")
     print(f"  adaptive dt      = {adaptive}")
 
     np.random.seed(seed)
@@ -411,6 +565,9 @@ def run_c2f(
             seed, initial_temperature_K, equil_ps,
             dt_ps=dt_ps, platform_name=platform_name,
             sample_bonds_at_T=initial_temperature_K,
+            calibration_file=calibration_file,
+            ts_bias_max_K=ts_bias_max_K,
+            max_equil_ps=max_pre_equil_ps,
         )
 
     system, positions, n_atoms = build_mka_system(
@@ -475,11 +632,20 @@ def run_c2f(
     system.addForce(cavity_force)
 
     # Displacer: auto step trigger disabled; Python calls displaceToEquilibrium
-    # on each rising λ edge via advance_to_time().
-    displacer = openmm.CavityParticleDisplacer(cavity_index, omegac_au, PHOTON_MASS_AMU)
-    displacer.setSwitchOnLambda(lambda_coupling)
-    displacer.setSwitchOnStep(2**31 - 1)
-    system.addForce(displacer)
+    # on each rising λ edge via advance_to_time().  In q≈0 mode (finite_q=False,
+    # cav-hoomd Figure 5) the photon is never displaced so the sudden quench
+    # delivers the ultrastrong-coupling kick.
+    if finite_q:
+        displacer = openmm.CavityParticleDisplacer(
+            cavity_index, omegac_au, PHOTON_MASS_AMU
+        )
+        displacer.setSwitchOnLambda(lambda_coupling)
+        displacer.setSwitchOnStep(2**31 - 1)
+        system.addForce(displacer)
+        print("  Photon displacement: ON (finite-q mode)")
+    else:
+        displacer = None
+        print("  Photon displacement: OFF (q≈0 mode — ultrastrong-coupling kick)")
 
     mol_indices = list(range(n_atoms))
     DualThermostat.setup_bussi_for_system(
@@ -573,21 +739,72 @@ def run_c2f(
     ts_off_samples: list = []
     prev_lambda_on_sample = False
 
+    # Optional brief post-cavity NVT at λ=0 (disabled by default — long equil
+    # can redistribute bond/nonbonded energy and destabilize T_s at t=0).
+    if post_cavity_equil_ps > 0 and max_post_equil_ps > 0:
+        post_equil_done = 0.0
+        chunk_ps = max(post_cavity_equil_ps, 10.0)
+        best_abs_bias = float("inf")
+        best_equil_state = None
+        while post_equil_done < max_post_equil_ps:
+            run_ps = min(chunk_ps, max_post_equil_ps - post_equil_done)
+            if run_ps <= 0:
+                break
+            print(f"\n--- Post-cavity equilibration ({run_ps:.1f} ps, "
+                  f"{post_equil_done + run_ps:.1f}/{max_post_equil_ps:.1f} ps total) ---")
+            _post_cavity_equilibrate(context, integrator, thermostat, dt_ps, run_ps)
+            post_equil_done += run_ps
+            T_s_check = _mean_structural_T_s(
+                context, integrator, thermostat, temp_tracker, energy_tracker, dt_ps,
+                window_ps=min(10.0, run_ps * 0.2),
+            )
+            if T_s_check is not None:
+                bias = T_s_check - initial_temperature_K
+                print(f"  After equil: T_s={T_s_check:.1f} K (bias {bias:+.1f} K vs bath)")
+                if abs(bias) < best_abs_bias:
+                    best_abs_bias = abs(bias)
+                    best_equil_state = context.getState(getPositions=True, getVelocities=True)
+                if abs(bias) <= ts_bias_max_K:
+                    break
+            if post_equil_done >= max_post_equil_ps:
+                break
+
+        if best_equil_state is not None:
+            context.setState(best_equil_state)
+            energy_tracker._cached = None
+            energy_tracker._cached_step = -1
+            if best_abs_bias > ts_bias_max_K:
+                print(
+                    f"  Restored best post-equil state (|T_s bias|={best_abs_bias:.1f} K "
+                    f"vs target < {ts_bias_max_K:.0f} K)"
+                )
+
+    # Post-equil MD advanced the context clock; production must start at t=0.
+    context.setTime(0.0 * unit.picosecond)
+    energy_tracker._cached = None
+    energy_tracker._cached_step = -1
+    adaptive_state = {"ramp_t0": None, "prev_lambda_on": False}
+
     # t=0 structural fictive temperature bias guard (coupling still off)
+    feedback_armed = True
     temps0 = temp_tracker.get_all()
     T_s0 = temps0.get("structural_fictive")
     if T_s0 is not None:
         ts_bias = T_s0 - initial_temperature_K
-        if abs(ts_bias) > 10.0:
+        if abs(ts_bias) > ts_bias_max_K:
+            feedback_armed = False
             print(
                 f"  WARNING: t=0 T_s={T_s0:.1f} K vs bath={initial_temperature_K:.1f} K "
-                f"(bias {ts_bias:+.1f} K; expected |bias| < 10 K). "
-                "Consider longer pre-equilibration."
+                f"(bias {ts_bias:+.1f} K; expected |bias| < {ts_bias_max_K:.0f} K). "
+                "Bath feedback deferred until λ-off T_s is within tolerance."
             )
         else:
             print(
-                f"  t=0 T_s={T_s0:.1f} K (bias {ts_bias:+.1f} K vs bath) — OK"
+                f"  t=0 T_s={T_s0:.1f} K (bias {ts_bias:+.1f} K vs bath) — OK, feedback enabled"
             )
+    else:
+        feedback_armed = False
+        print("  WARNING: t=0 T_s unavailable — bath feedback deferred")
 
     csv_path = f"{output_prefix}_energies.csv"
     csv_file = open(csv_path, "w")
@@ -601,7 +818,6 @@ def run_c2f(
         sample_interval_ps if sample_interval_ps is not None else feedback_interval_ps
     )
     n_samples = max(1, int(round(runtime_ps / sample_interval_ps)))
-    adaptive_state = {"ramp_t0": None, "prev_lambda_on": False}
     dt_log = []
 
     print(f"\n  {n_samples} sample points every {sample_interval_ps} ps")
@@ -645,38 +861,84 @@ def run_c2f(
 
             new_bath_T = current_bath_T
 
-            # C2F feedback: measure T_s only during λ-off windows; update bath at
-            # each OFF→ON edge using the mean structural signal from the off period.
-            if time_ps >= coupling_start_ps:
-                if not lambda_on and prev_lambda_on_sample:
-                    ts_off_samples = []
+            if feedback_every_step:
+                # Faithful cav-hoomd C2F: update bath every sample from the
+                # *instantaneous* T_s (no λ-off gating, --diffeq-update-interval 0).
+                if time_ps >= coupling_start_ps and T_s is not None:
+                    if not feedback_armed:
+                        inst_bias = T_s - current_bath_T
+                        if abs(inst_bias) <= ts_bias_max_K:
+                            feedback_armed = True
+                            print(
+                                f"  Feedback armed at t={time_ps:.1f} ps "
+                                f"(T_s={T_s:.1f} K, bias {inst_bias:+.1f} K)"
+                            )
+                    if feedback_armed:
+                        if feedback_method == "empirical":
+                            T_s_window.append(T_s)
+                            if len(T_s_window) > T_s_window_max_size:
+                                T_s_window.pop(0)
+                            new_bath_T = max(T_min, float(np.mean(T_s_window)))
+                            if T_max is not None:
+                                new_bath_T = min(T_max, new_bath_T)
+                        elif feedback_controller is not None:
+                            result = feedback_controller.step(
+                                time_ps,
+                                current_bath_T,
+                                signal_override=T_s,
+                                force=True,
+                                dt_ps_override=sample_interval_ps,
+                            )
+                            if result is not None:
+                                new_bath_T = result
+            else:
+                # C2F feedback: measure T_s only during λ-off windows; update bath at
+                # each OFF→ON edge using the mean structural signal from the off period.
+                if time_ps >= coupling_start_ps:
+                    if not lambda_on and prev_lambda_on_sample:
+                        ts_off_samples = []
 
-                if not lambda_on and T_s is not None:
-                    ts_off_samples.append(T_s)
+                    if not lambda_on and T_s is not None:
+                        ts_off_samples.append(T_s)
 
-                if lambda_on and not prev_lambda_on_sample and ts_off_samples:
-                    T_s_mean = float(np.mean(ts_off_samples))
-                    off_window_ps = square_wave_period_ps * (
-                        1.0 - square_wave_duty_cycle
-                    )
-                    if feedback_method == "empirical":
-                        T_s_window.append(T_s_mean)
-                        if len(T_s_window) > T_s_window_max_size:
-                            T_s_window.pop(0)
-                        new_bath_T = max(T_min, float(np.mean(T_s_window)))
-                        if T_max is not None:
-                            new_bath_T = min(T_max, new_bath_T)
-                    elif feedback_controller is not None:
-                        result = feedback_controller.step(
-                            time_ps,
-                            current_bath_T,
-                            signal_override=T_s_mean,
-                            force=True,
-                            dt_ps_override=off_window_ps,
+                    if lambda_on and not prev_lambda_on_sample and ts_off_samples:
+                        T_s_mean = float(np.mean(ts_off_samples))
+                        off_window_ps = square_wave_period_ps * (
+                            1.0 - square_wave_duty_cycle
                         )
-                        if result is not None:
-                            new_bath_T = result
-                    ts_off_samples = []
+                        if not feedback_armed:
+                            mean_bias = T_s_mean - current_bath_T
+                            if abs(mean_bias) <= ts_bias_max_K:
+                                feedback_armed = True
+                                print(
+                                    f"  Feedback armed at t={time_ps:.1f} ps "
+                                    f"(λ-off T_s={T_s_mean:.1f} K, bias {mean_bias:+.1f} K)"
+                                )
+                            else:
+                                print(
+                                    f"  Skipping feedback at t={time_ps:.1f} ps "
+                                    f"(λ-off T_s={T_s_mean:.1f} K, bias {mean_bias:+.1f} K)"
+                                )
+                                ts_off_samples = []
+                        if feedback_armed:
+                            if feedback_method == "empirical":
+                                T_s_window.append(T_s_mean)
+                                if len(T_s_window) > T_s_window_max_size:
+                                    T_s_window.pop(0)
+                                new_bath_T = max(T_min, float(np.mean(T_s_window)))
+                                if T_max is not None:
+                                    new_bath_T = min(T_max, new_bath_T)
+                            elif feedback_controller is not None:
+                                result = feedback_controller.step(
+                                    time_ps,
+                                    current_bath_T,
+                                    signal_override=T_s_mean,
+                                    force=True,
+                                    dt_ps_override=off_window_ps,
+                                )
+                                if result is not None:
+                                    new_bath_T = result
+                            ts_off_samples = []
 
             prev_lambda_on_sample = lambda_on
 

@@ -3497,6 +3497,7 @@ void ReferenceCalcCavityForceKernel::initialize(const System& system, const Cavi
     omegac = force.getOmegac();
     lambdaCoupling = force.getLambdaCoupling();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     couplingSchedule = force.getLambdaCouplingSchedule();
     
     // Store laser parameters
@@ -3524,6 +3525,7 @@ void ReferenceCalcCavityForceKernel::initialize(const System& system, const Cavi
     modStartTimePs = force.getModulationStartTimePs();
     modStopTimePs = force.getModulationStopTimePs();
     modDecayTauPs = force.getModulationDecayTauPs();
+    modExtraParam1 = force.getModulationExtraParam1();
     modTargetTemperatureK = force.getModulationTargetTemperatureK();
     modMinAmplitude = force.getModulationMinAmplitude();
     modMaxAmplitude = force.getModulationMaxAmplitude();
@@ -3614,7 +3616,7 @@ double ReferenceCalcCavityForceKernel::execute(ContextImpl& context, bool includ
     couplingEnergy = epsilon * (qPhotonXY[0]*dipoleXY[0] + qPhotonXY[1]*dipoleXY[1]);
     
     // Dipole self-energy: (epsilon^2 / 2K) * d_xy^2
-    dipoleSelfEnergy = 0.5 * epsilon * epsilon / K * (dipoleXY[0]*dipoleXY[0] + dipoleXY[1]*dipoleXY[1]);
+    dipoleSelfEnergy = includeDSE ? 0.5 * epsilon * epsilon / K * (dipoleXY[0]*dipoleXY[0] + dipoleXY[1]*dipoleXY[1]) : 0.0;
     
     // Get current time in picoseconds
     double time_ps = context.getTime();
@@ -3641,7 +3643,7 @@ double ReferenceCalcCavityForceKernel::execute(ContextImpl& context, bool includ
     if (includeForces) {
         // Dq = q + (epsilon/K) * d (displaced cavity mode position)
         // Using epsilon/K ensures correct unit conversion
-        double epsilonOverK = epsilon / K;  // units: 1/e
+        double epsilonOverK = includeDSE ? epsilon / K : 0.0;  // units: 1/e
         Vec3 Dq(qPhoton[0] + epsilonOverK * dipole[0],
                 qPhoton[1] + epsilonOverK * dipole[1],
                 0.0);
@@ -3682,6 +3684,7 @@ void ReferenceCalcCavityForceKernel::copyParametersToContext(ContextImpl& contex
     omegac = force.getOmegac();
     lambdaCoupling = force.getLambdaCoupling();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     couplingSchedule = force.getLambdaCouplingSchedule();
     // Update laser parameters
     cavityDriveEnabled = force.getCavityDriveEnabled();
@@ -3706,6 +3709,7 @@ void ReferenceCalcCavityForceKernel::copyParametersToContext(ContextImpl& contex
     modStartTimePs = force.getModulationStartTimePs();
     modStopTimePs = force.getModulationStopTimePs();
     modDecayTauPs = force.getModulationDecayTauPs();
+    modExtraParam1 = force.getModulationExtraParam1();
     modTargetTemperatureK = force.getModulationTargetTemperatureK();
     modMinAmplitude = force.getModulationMinAmplitude();
     modMaxAmplitude = force.getModulationMaxAmplitude();
@@ -3748,6 +3752,26 @@ double ReferenceCalcCavityForceKernel::evaluateModulation(double time_ps) {
         double phase = dt / modPeriodPs;
         phase = phase - std::floor(phase);
         return (phase < modDutyCycle) ? adaptiveAmplitude : 0.0;
+    }
+
+    if (modulationType == 5) {  // DecayingSquareWave
+        int periodIndex = (int)(dt / modPeriodPs);
+        double currentAmp = modAmplitude * std::pow(1.0 - modExtraParam1, periodIndex);
+        if (currentAmp < modMinAmplitude)
+            return 0.0;
+        double phase = dt / modPeriodPs;
+        phase = phase - std::floor(phase);
+        return (phase < modDutyCycle) ? currentAmp : 0.0;
+    }
+
+    if (modulationType == 6) {  // Sinusoid
+        double phase = 2.0 * M_PI * dt / modPeriodPs + modExtraParam1;
+        return modAmplitude * (1.0 + std::sin(phase)) / 2.0;
+    }
+
+    if (modulationType == 7) {  // ExponentialWave
+        double tInPeriod = std::fmod(dt, modPeriodPs);
+        return modAmplitude * std::exp(-tInPeriod / modDecayTauPs);
     }
 
     return lambdaCoupling;
@@ -3857,6 +3881,7 @@ void ReferenceCalcMultiModeCavityForceKernel::initialize(const System& system, c
     photonMass = force.getPhotonMass();
     cavityLength = force.getCavityLength();
     moleculeZ = force.getMoleculeZ();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     
     cavityParticleIndices.resize(numModes);
     spatialProfiles.resize(numModes);
@@ -3993,7 +4018,7 @@ double ReferenceCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bo
         couplingEnergy += epsf_n * (qPhoton[0]*dipole[0] + qPhoton[1]*dipole[1]);
 
         if (includeForces) {
-            double epsfOverK_n = (K_n > 0.0) ? (epsf_n / K_n) : 0.0;
+            double epsfOverK_n = (includeDSE && K_n > 0.0) ? (epsf_n / K_n) : 0.0;
             double DqX = qPhoton[0] + epsfOverK_n * dipole[0];
             double DqY = qPhoton[1] + epsfOverK_n * dipole[1];
 
@@ -4016,7 +4041,7 @@ double ReferenceCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bo
     }
 
     double useDSE = modEnabled ? 0.5 * dynamicDSEPrefactor : dsePrefactor;
-    dipoleSelfEnergy = useDSE * (dipole[0]*dipole[0] + dipole[1]*dipole[1]);
+    dipoleSelfEnergy = includeDSE ? useDSE * (dipole[0]*dipole[0] + dipole[1]*dipole[1]) : 0.0;
 
     return harmonicEnergy + couplingEnergy + dipoleSelfEnergy;
 }
@@ -4025,6 +4050,7 @@ void ReferenceCalcMultiModeCavityForceKernel::copyParametersToContext(ContextImp
     omega1 = force.getOmega1();
     lambda1 = force.getLambda1();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     numModes = force.getNumModes();
     for (int i = 0; i < numModes; i++) {
         spatialProfiles[i] = force.getSpatialProfiles()[i];

@@ -44,7 +44,8 @@ CavityForce::CavityForce(int cavityParticleIndex, double omegac, double lambdaCo
         directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0),
         modulationType(ModulationNone), modAmplitude(0.0), modPeriodPs(0.0),
         modDutyCycle(0.5), modStartTimePs(0.0), modStopTimePs(-1.0), modDecayTauPs(1.0),
-        modTargetTemperatureK(300.0), modMinAmplitude(1e-8), modMaxAmplitude(0.1) {
+        modTargetTemperatureK(300.0), modMinAmplitude(1e-8), modMaxAmplitude(0.1),
+        modExtraParam1(0.0), includeDipoleSelfEnergy(true) {
     if (omegac <= 0)
         throw OpenMMException("CavityForce: omegac must be positive");
     if (photonMass <= 0)
@@ -283,6 +284,57 @@ void CavityForce::setAdaptiveSquareWaveModulation(double targetCoupling, double 
     modTargetTemperatureK = targetTemperatureK;
     modMinAmplitude = minAmplitude;
     modMaxAmplitude = maxAmplitude;
+}
+
+void CavityForce::setDecayingSquareWaveModulation(double initialAmplitude, double periodPs,
+                                                 double dutyCycle, double decayRatePerPeriod,
+                                                 double startTimePs, double stopTimePs,
+                                                 double minimumAmplitude) {
+    if (periodPs <= 0)
+        throw OpenMMException("CavityForce: decaying square-wave requires periodPs > 0");
+    if (dutyCycle < 0 || dutyCycle > 1)
+        throw OpenMMException("CavityForce: dutyCycle must be in [0, 1]");
+    if (decayRatePerPeriod < 0 || decayRatePerPeriod > 1)
+        throw OpenMMException("CavityForce: decayRatePerPeriod must be in [0, 1]");
+    modulationType = ModulationDecayingSquareWave;
+    modAmplitude = initialAmplitude;
+    modPeriodPs = periodPs;
+    modDutyCycle = dutyCycle;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+    modExtraParam1 = decayRatePerPeriod;
+    modMinAmplitude = minimumAmplitude;
+    modDecayTauPs = 1.0;
+}
+
+void CavityForce::setSinusoidModulation(double amplitude, double periodPs, double phaseOffset,
+                                        double startTimePs, double stopTimePs) {
+    if (periodPs <= 0)
+        throw OpenMMException("CavityForce: sinusoid modulation requires periodPs > 0");
+    modulationType = ModulationSinusoid;
+    modAmplitude = amplitude;
+    modPeriodPs = periodPs;
+    modDutyCycle = 0.5;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+    modExtraParam1 = phaseOffset;
+    modDecayTauPs = 1.0;
+}
+
+void CavityForce::setExponentialWaveModulation(double amplitude, double periodPs, double decayTauPs,
+                                               double startTimePs, double stopTimePs) {
+    if (periodPs <= 0)
+        throw OpenMMException("CavityForce: exponential-wave requires periodPs > 0");
+    if (decayTauPs <= 0)
+        throw OpenMMException("CavityForce: exponential-wave requires decayTauPs > 0");
+    modulationType = ModulationExponentialWave;
+    modAmplitude = amplitude;
+    modPeriodPs = periodPs;
+    modDutyCycle = 0.5;
+    modStartTimePs = startTimePs;
+    modStopTimePs = stopTimePs;
+    modDecayTauPs = decayTauPs;
+    modExtraParam1 = 0.0;
 }
 
 void CavityForce::updateParametersInContext(Context& context) {

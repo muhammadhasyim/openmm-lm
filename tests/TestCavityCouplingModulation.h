@@ -16,7 +16,7 @@
 #include "openmm/HarmonicBondForce.h"
 #include "openmm/BussiThermostat.h"
 #include "openmm/OpenMMException.h"
-#include "openmm/ReferencePlatform.h"
+#include "ReferencePlatform.h"
 #include "openmm/System.h"
 #include "openmm/VerletIntegrator.h"
 #include <cmath>
@@ -878,6 +878,209 @@ void testAdaptiveWithTemperatureChange() {
 }
 
 // ===================================================================
+//  TEST 16: ModulationDecayingSquareWave — amplitude decays each period
+// ===================================================================
+void testModulationDecayingSquareWave() {
+    cout << "testModulationDecayingSquareWave ... " << flush;
+    double amplitude = 0.5;
+    double period    = 0.1;
+    double dutyCycle = 0.5;
+    double decayRate = 0.1;  // 10% decay per period
+
+    TestSystem ts(0.0);
+    ts.cavityForce->setDecayingSquareWaveModulation(
+        amplitude, period, dutyCycle, decayRate, 0.0, -1.0, 1e-8);
+
+    VerletIntegrator integrator(DT_PS);
+    Context context(ts.system, integrator, platform);
+    context.setPositions(ts.positions);
+    context.setVelocitiesToTemperature(0.0);
+
+    // t = 0.01 ps: first period ON phase, full amplitude
+    integrator.step(10);
+    {
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        ASSERT(dse > 1e-10);
+    }
+
+    // t = 0.075 ps: first period OFF phase
+    integrator.step(65);
+    {
+        double coupling = ts.cavityForce->getCouplingEnergy(context);
+        double dse      = ts.cavityForce->getDipoleSelfEnergy(context);
+        ASSERT_EQUAL_TOL(0.0, coupling, 1e-10);
+        ASSERT_EQUAL_TOL(0.0, dse, 1e-10);
+    }
+
+    // t = 0.11 ps: second period ON phase, reduced amplitude
+    integrator.step(35);
+    {
+        State state = context.getState(State::Positions);
+        vector<Vec3> pos = state.getPositions();
+        double dx = (+1.0)*pos[0][0] + (-1.0)*pos[1][0];
+        double dy = (+1.0)*pos[0][1] + (-1.0)*pos[1][1];
+
+        double decayedAmp = amplitude * pow(1.0 - decayRate, 1);
+        double eps = decayedAmp * OMEGAC * CONV;
+        double expectedDSE = 0.5 * eps * eps / ts.K * (dx*dx + dy*dy);
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        ASSERT_EQUAL_TOL(expectedDSE, dse, 0.15);
+    }
+
+    cout << "PASS" << endl;
+}
+
+// ===================================================================
+//  TEST 17: ModulationSinusoid — smooth periodic coupling
+// ===================================================================
+void testModulationSinusoid() {
+    cout << "testModulationSinusoid ... " << flush;
+    double amplitude = 0.4;
+    double period    = 0.1;
+
+    TestSystem ts(0.0);
+    ts.cavityForce->setSinusoidModulation(amplitude, period, 0.0, 0.0, -1.0);
+
+    VerletIntegrator integrator(DT_PS);
+    Context context(ts.system, integrator, platform);
+    context.setPositions(ts.positions);
+    context.setVelocitiesToTemperature(0.0);
+
+    // At t=0 with phase=0: lambda = A*(1+sin(0))/2 = A/2
+    {
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        double halfAmp = 0.5 * amplitude;
+        double eps = halfAmp * OMEGAC * CONV;
+        double expectedDSE = 0.5 * eps * eps / ts.K * (ts.dipoleX*ts.dipoleX);
+        ASSERT_EQUAL_TOL(expectedDSE, dse, 1e-4);
+    }
+
+    // At t = period/4: lambda = A*(1+sin(pi/2))/2 = A
+    integrator.step(25);
+    {
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        double eps = amplitude * OMEGAC * CONV;
+        double expectedDSE = 0.5 * eps * eps / ts.K * (ts.dipoleX*ts.dipoleX);
+        ASSERT_EQUAL_TOL(expectedDSE, dse, 0.05);
+    }
+
+    cout << "PASS" << endl;
+}
+
+// ===================================================================
+//  TEST 18: ModulationExponentialWave — decays within each period
+// ===================================================================
+void testModulationExponentialWave() {
+    cout << "testModulationExponentialWave ... " << flush;
+    double amplitude = 0.5;
+    double period    = 0.2;
+    double decayTau  = 0.05;
+
+    TestSystem ts(0.0);
+    ts.cavityForce->setExponentialWaveModulation(
+        amplitude, period, decayTau, 0.0, -1.0);
+
+    VerletIntegrator integrator(DT_PS);
+    Context context(ts.system, integrator, platform);
+    context.setPositions(ts.positions);
+    context.setVelocitiesToTemperature(0.0);
+
+    // At t=0: lambda = amplitude
+    {
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        double eps = amplitude * OMEGAC * CONV;
+        double expectedDSE = 0.5 * eps * eps / ts.K * (ts.dipoleX*ts.dipoleX);
+        ASSERT_EQUAL_TOL(expectedDSE, dse, 1e-4);
+    }
+
+    // At t = tau: lambda = amplitude * exp(-1)
+    integrator.step(50);
+    {
+        double decayedAmp = amplitude * exp(-1.0);
+        double eps = decayedAmp * OMEGAC * CONV;
+        double expectedDSE = 0.5 * eps * eps / ts.K * (ts.dipoleX*ts.dipoleX);
+        double dse = ts.cavityForce->getDipoleSelfEnergy(context);
+        ASSERT_EQUAL_TOL(expectedDSE, dse, 0.05);
+    }
+
+    cout << "PASS" << endl;
+}
+
+// ===================================================================
+//  TEST 19: Reference vs GPU agreement for new modulation modes
+// ===================================================================
+void testNewModesReferencePlatformAgreement() {
+    cout << "testNewModesReferencePlatformAgreement ... " << flush;
+
+    auto runComparison = [&](CavityForce* (*configure)(int cavityIndex)) {
+        auto buildSystem = [&](CavityForce* (*cfg)(int)) -> pair<System*, CavityForce*> {
+            System* sys = new System();
+            sys->setDefaultPeriodicBoxVectors(Vec3(5,0,0), Vec3(0,5,0), Vec3(0,0,5));
+            sys->addParticle(12.0);
+            sys->addParticle(12.0);
+            sys->addParticle(PHOTON_MASS);
+
+            NonbondedForce* nb = new NonbondedForce();
+            nb->setNonbondedMethod(NonbondedForce::PME);
+            nb->setCutoffDistance(2.0);
+            nb->addParticle(+1.0, 0.3, 0.0);
+            nb->addParticle(-1.0, 0.3, 0.0);
+            nb->addParticle( 0.0, 0.1, 0.0);
+            nb->addException(2, 0, 0.0, 0.1, 0.0);
+            nb->addException(2, 1, 0.0, 0.1, 0.0);
+            sys->addForce(nb);
+
+            CavityForce* cf = cfg(2);
+            sys->addForce(cf);
+            return {sys, cf};
+        };
+
+        vector<Vec3> positions = {Vec3(1,0,0), Vec3(-1,0,0), Vec3(0.1, 0.2, 0)};
+
+        auto [sysA, cfA] = buildSystem(configure);
+        VerletIntegrator intA(DT_PS);
+        Context ctxA(*sysA, intA, platform);
+        ctxA.setPositions(positions);
+        ctxA.setVelocitiesToTemperature(10.0, 42);
+
+        ReferencePlatform refPlatform;
+        auto [sysB, cfB] = buildSystem(configure);
+        VerletIntegrator intB(DT_PS);
+        Context ctxB(*sysB, intB, refPlatform);
+        ctxB.setPositions(positions);
+        ctxB.setVelocitiesToTemperature(10.0, 42);
+
+        intA.step(120);
+        intB.step(120);
+
+        ASSERT_EQUAL_TOL(cfB->getHarmonicEnergy(ctxB), cfA->getHarmonicEnergy(ctxA), 1e-4);
+        ASSERT_EQUAL_TOL(cfB->getCouplingEnergy(ctxB), cfA->getCouplingEnergy(ctxA), 1e-4);
+        ASSERT_EQUAL_TOL(cfB->getDipoleSelfEnergy(ctxB), cfA->getDipoleSelfEnergy(ctxA), 1e-4);
+
+        delete sysA;
+        delete sysB;
+    };
+
+    runComparison([](int idx) -> CavityForce* {
+        CavityForce* cf = new CavityForce(idx, OMEGAC, 0.0, PHOTON_MASS);
+        cf->setDecayingSquareWaveModulation(0.4, 0.05, 0.5, 0.05, 0.0, -1.0, 1e-8);
+        return cf;
+    });
+    runComparison([](int idx) -> CavityForce* {
+        CavityForce* cf = new CavityForce(idx, OMEGAC, 0.0, PHOTON_MASS);
+        cf->setSinusoidModulation(0.4, 0.05, 0.0, 0.0, -1.0);
+        return cf;
+    });
+    runComparison([](int idx) -> CavityForce* {
+        CavityForce* cf = new CavityForce(idx, OMEGAC, 0.0, PHOTON_MASS);
+        cf->setExponentialWaveModulation(0.4, 0.1, 0.03, 0.0, -1.0);
+        return cf;
+    });
+
+    cout << "PASS" << endl;
+}
+
+// ===================================================================
 //  Entry point
 // ===================================================================
 void runPlatformTests();
@@ -888,6 +1091,10 @@ int main(int argc, char* argv[]) {
 
         testModulationNone();
         testModulationStep();
+        testModulationDecayingSquareWave();
+        testModulationSinusoid();
+        testModulationExponentialWave();
+        testNewModesReferencePlatformAgreement();
         testModulationSquareWave();
         testSquareWaveDutyCycle();
         testModulationDecayingStep();

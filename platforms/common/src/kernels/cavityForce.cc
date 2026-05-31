@@ -24,6 +24,9 @@
 #define MODULATION_SQUARE_WAVE 2
 #define MODULATION_DECAYING_STEP 3
 #define MODULATION_ADAPTIVE_SQUARE_WAVE 4
+#define MODULATION_DECAYING_SQUARE_WAVE 5
+#define MODULATION_SINUSOID 6
+#define MODULATION_EXPONENTIAL_WAVE 7
 
 /**
  * Evaluate coupling modulation entirely on the GPU.
@@ -40,7 +43,9 @@
  * @param modDutyCycle    fraction of period that is "on" [0,1]
  * @param modStartTimePs  time at which modulation activates
  * @param modStopTimePs   time at which modulation deactivates (-1 = never)
- * @param modDecayTauPs   exponential decay time constant (decaying-step only)
+ * @param modDecayTauPs   exponential decay time constant (decaying-step / exp-wave)
+ * @param modExtraParam1  decay rate per period (decaying square wave) or phase (sinusoid)
+ * @param modMinAmplitude minimum amplitude for decaying square wave
  * @return effective lambdaCoupling for this timestep
  */
 DEVICE float evaluateModulation(float time_ps, float baseLambda,
@@ -48,6 +53,7 @@ DEVICE float evaluateModulation(float time_ps, float baseLambda,
                                 float modPeriodPs, float modDutyCycle,
                                 float modStartTimePs, float modStopTimePs,
                                 float modDecayTauPs,
+                                float modExtraParam1, float modMinAmplitude,
                                 GLOBAL const float* RESTRICT adaptiveState) {
     if (modType == MODULATION_NONE)
         return baseLambda;
@@ -79,6 +85,26 @@ DEVICE float evaluateModulation(float time_ps, float baseLambda,
         float phase = dt / modPeriodPs;
         phase = phase - floorf(phase);
         return (phase < modDutyCycle) ? currentAmp : 0.0f;
+    }
+
+    if (modType == MODULATION_DECAYING_SQUARE_WAVE) {
+        int periodIndex = (int)(dt / modPeriodPs);
+        float currentAmp = modAmplitude * powf(1.0f - modExtraParam1, (float)periodIndex);
+        if (currentAmp < modMinAmplitude)
+            return 0.0f;
+        float phase = dt / modPeriodPs;
+        phase = phase - floorf(phase);
+        return (phase < modDutyCycle) ? currentAmp : 0.0f;
+    }
+
+    if (modType == MODULATION_SINUSOID) {
+        float phase = 2.0f * 3.14159265f * dt / modPeriodPs + modExtraParam1;
+        return modAmplitude * (1.0f + sinf(phase)) / 2.0f;
+    }
+
+    if (modType == MODULATION_EXPONENTIAL_WAVE) {
+        float tInPeriod = fmodf(dt, modPeriodPs);
+        return modAmplitude * expf(-tInPeriod / modDecayTauPs);
     }
 
     return baseLambda;
@@ -326,7 +352,8 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
         float E0, float omega_L, float phase_L, int envelope_type_L, float env_param1_L, float env_param2_L, int directLaserEnabled,
         int modType, float modAmplitude, float modPeriodPs, float modDutyCycle,
         float modStartTimePs, float modStopTimePs, float modDecayTauPs,
-        GLOBAL const float* RESTRICT adaptiveState) {
+        float modExtraParam1, float modMinAmplitude,
+        GLOBAL const float* RESTRICT adaptiveState, int includeDSE) {
 
     // Unit conversion constants (NIST 2018 CODATA, matching Reference platform)
     const float HARTREE_TO_KJMOL = 2625.4996f;
@@ -339,7 +366,8 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
                                                 modType, modAmplitude,
                                                 modPeriodPs, modDutyCycle,
                                                 modStartTimePs, modStopTimePs,
-                                                modDecayTauPs, adaptiveState);
+                                                modDecayTauPs, modExtraParam1,
+                                                modMinAmplitude, adaptiveState);
 
     // Read dipole from global memory (should be called after computeCavityDipole)
     float dipoleX = dipole[0];
@@ -365,7 +393,7 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
     
     // Compute displaced cavity position: Dq = q + (epsilon/K) * d
     // This ensures proper unit conversion: epsilon/K has units [1/e]
-    float epsilonOverK = epsilon / K;
+    float epsilonOverK = includeDSE ? (epsilon / K) : 0.0f;
     float DqX = qPhoton.x + epsilonOverK * dipoleX;
     float DqY = qPhoton.y + epsilonOverK * dipoleY;
     
@@ -391,7 +419,7 @@ KERNEL void computeCavityForces(GLOBAL const real4* RESTRICT posq, GLOBAL const 
         float coupling = epsilon * (qPhoton.x*dipoleX + qPhoton.y*dipoleY);
         
         // Dipole self-energy: (epsilon^2 / 2K) * d_xy^2
-        float dipoleSelf = 0.5f * epsilon * epsilon / K * (dipoleX*dipoleX + dipoleY*dipoleY);
+        float dipoleSelf = includeDSE ? 0.5f * epsilon * epsilon / K * (dipoleX*dipoleX + dipoleY*dipoleY) : 0.0f;
         
         // Cavity drive energy: E_drive = -f(t) * q (Case 2)
         float cavityDrive = -f_drive * (qPhoton.x + qPhoton.y);

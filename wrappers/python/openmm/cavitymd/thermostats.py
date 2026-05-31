@@ -97,6 +97,7 @@ class DualThermostat:
 
         bussi = openmm.BussiThermostat(temperature_K, tau_ps)
         bussi.setApplyToAllParticles(False)
+        bussi.setSubtractCMMotion(True)  # DOF = 3N-3, matches cav-hoomd
         for idx in molecular_indices:
             bussi.addParticle(idx)
         system.addForce(bussi)

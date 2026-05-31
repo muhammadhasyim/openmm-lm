@@ -249,7 +249,7 @@ def add_cavity_particle(system, positions, omegac_au, photon_mass_amu):
 
 
 def setup_cavity_coupling(system, cavity_index, omegac_au, lambda_coupling, 
-                         photon_mass_amu):
+                         photon_mass_amu, include_dipole_self_energy=True):
     """
     Set up cavity coupling.
     
@@ -275,8 +275,10 @@ def setup_cavity_coupling(system, cavity_index, omegac_au, lambda_coupling,
     
     # CavityForce - set coupling directly to target value
     cavity_force = openmm.CavityForce(cavity_index, omegac_au, lambda_coupling, photon_mass_amu)
+    cavity_force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
     system.addForce(cavity_force)
     print(f"  CavityForce added with lambda={lambda_coupling}")
+    print(f"  Dipole self-energy: {'ON' if include_dipole_self_energy else 'OFF'}")
     
     # CavityParticleDisplacer for finite-q correction - also set to target lambda
     displacer = openmm.CavityParticleDisplacer(cavity_index, omegac_au, photon_mass_amu)
@@ -332,7 +334,8 @@ def compute_dipole(state, charges, num_molecular):
 
 def run_simulation(lambda_coupling=0.01, cavity_freq_cm=1600.0, num_molecules=1000, 
                   box_size_nm=3.0, temperature_K=300.0, dt_ps=0.001, equilibration_ps=100.0,
-                  production_ps=900.0, output_prefix="water_cavity", disable_dipole_output=False):
+                  production_ps=900.0, output_prefix="water_cavity", disable_dipole_output=False,
+                  include_dipole_self_energy=True):
     """
     Run the water cavity MD simulation with streaming output.
     
@@ -394,7 +397,8 @@ def run_simulation(lambda_coupling=0.01, cavity_freq_cm=1600.0, num_molecules=10
     
     # Setup cavity coupling
     cavity_force, displacer = setup_cavity_coupling(
-        system, cavity_index, omegac_au, lambda_coupling, photon_mass_amu
+        system, cavity_index, omegac_au, lambda_coupling, photon_mass_amu,
+        include_dipole_self_energy=include_dipole_self_energy,
     )
     
     # Setup thermostats
@@ -562,6 +566,8 @@ def main():
                        help='Output prefix (default: water_cavity)')
     parser.add_argument('--test', action='store_true',
                        help='Quick test run (216 molecules, 10 ps)')
+    parser.add_argument('--no-dipole-self-energy', action='store_true',
+                       help='Disable dipole self-energy (self-polarization) term in CavityForce')
     parser.add_argument('--no-dipole', action='store_true', dest='no_dipole',
                        help='Disable dipole output for speed benchmark')
     
@@ -585,7 +591,8 @@ def main():
         equilibration_ps=args.equil,
         production_ps=args.prod,
         output_prefix=args.output,
-        disable_dipole_output=args.no_dipole
+        disable_dipole_output=args.no_dipole,
+        include_dipole_self_energy=not args.no_dipole_self_energy,
     )
 
 

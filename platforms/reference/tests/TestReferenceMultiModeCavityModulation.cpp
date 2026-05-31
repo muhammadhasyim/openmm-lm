@@ -1,6 +1,6 @@
 /* Tests for per-mode adaptive modulation — Reference platform. */
 
-#include "openmm/ReferencePlatform.h"
+#include "ReferencePlatform.h"
 
 using namespace OpenMM;
 

@@ -41,6 +41,7 @@ MultiModeCavityForce::MultiModeCavityForce(int numModes, double omega1, double l
         numModes(numModes), omega1(omega1), lambda1(lambda1),
         cavityLength(cavityLength), moleculeZ(moleculeZ),
         photonMass(photonMass), dsePrefactor(0.0),
+        includeDipoleSelfEnergy(true),
         modEnabled(false), modPeriodPs(0.0), modDutyCycle(0.5),
         modStartTimePs(0.0), modStopTimePs(-1.0),
         modeGTargets(numModes, 0.0), modeTTargets(numModes, 300.0),
@@ -56,6 +57,14 @@ MultiModeCavityForce::MultiModeCavityForce(int numModes, double omega1, double l
     
     // Precompute spatial profiles and DSE prefactor
     recomputeDerivedQuantities();
+}
+
+void MultiModeCavityForce::setIncludeDipoleSelfEnergy(bool include) {
+    includeDipoleSelfEnergy = include;
+}
+
+bool MultiModeCavityForce::getIncludeDipoleSelfEnergy() const {
+    return includeDipoleSelfEnergy;
 }
 
 void MultiModeCavityForce::setOmega1(double omega1) {

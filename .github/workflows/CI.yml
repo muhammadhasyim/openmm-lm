@@ -1,21 +1,12 @@
-name: CI
+name: CI (legacy, nightly)
+
+# Superseded for day-to-day development by .github/workflows/pixi-ci.yml and docs/BUILD_AND_REINSTALL.md.
+# Retained as a nightly upstream-style matrix (CUDA versions, OpenCL, Windows, etc.).
 
 on:
-  push:
-    branches:
-      - "master"
-      - "mlip"
-      - "cavity-md"
-  pull_request:
-    branches:
-      - "master"
-      - "mlip"
-      - "cavity-md"
   schedule:
-    # Nightly tests run on master by default:
-    #   Scheduled workflows run on the latest commit on the default or base branch.
-    #   (from https://help.github.com/en/actions/reference/events-that-trigger-workflows#scheduled-events-schedule)
     - cron: "0 0 * * *"
+  workflow_dispatch:
 
 
 jobs:

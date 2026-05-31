@@ -1,6 +1,6 @@
 /* Tests for per-mode adaptive modulation — CUDA platform. */
 
-#include "openmm/CudaPlatform.h"
+#include "CudaPlatform.h"
 #include <string>
 
 using namespace OpenMM;

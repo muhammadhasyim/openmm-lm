@@ -4,3 +4,6 @@
 [submodule "i-pi"]
 	path = i-pi
 	url = https://github.com/i-pi/i-pi.git
+[submodule "openmm-ml"]
+	path = openmm-ml
+	url = https://github.com/muhammadhasyim/openmm-ml

@@ -30,6 +30,7 @@
 #include "openmm/internal/AssertionUtilities.h"
 #include "openmm/CavityForce.h"
 #include "openmm/CavityParticleDisplacer.h"
+#include "openmm/MultiModeCavityForce.h"
 #include "openmm/Context.h"
 #include "openmm/NonbondedForce.h"
 #include "openmm/System.h"
@@ -212,6 +213,169 @@ void testCavityForces() {
 }
 
 /**
+ * Test that disabling dipole self-energy zeros DSE energy and changes molecular
+ * forces to pure bilinear coupling while leaving cavity-particle forces unchanged.
+ */
+void testDipoleSelfEnergyToggle() {
+    const double omegac = 0.01;
+    const double lambda = 0.5;
+    const double photonMass = 1.0;
+
+    ASSERT(CavityForce(2, omegac, lambda, photonMass).getIncludeDipoleSelfEnergy());
+
+    const double HARTREE_TO_KJMOL = 2625.5;
+    const double BOHR_TO_NM = 0.0529177;
+    const double AMU_TO_AU = 1822.888;
+    const double CONVERSION_FACTOR = HARTREE_TO_KJMOL / (BOHR_TO_NM * BOHR_TO_NM);
+
+    double photonMass_au = photonMass * AMU_TO_AU;
+    double K = photonMass_au * omegac * omegac * CONVERSION_FACTOR;
+    double epsilon = lambda * omegac * CONVERSION_FACTOR;
+
+    double dipoleX = 2.0;
+    double dipoleY = 0.0;
+    double qx = 0.5, qy = 0.5;
+
+    double expectedHarmonic = 0.5 * K * (qx*qx + qy*qy);
+    double expectedCoupling = epsilon * (qx*dipoleX + qy*dipoleY);
+    double expectedDSE = 0.5 * epsilon * epsilon / K * (dipoleX*dipoleX + dipoleY*dipoleY);
+
+    double DqX_withDSE = qx + (epsilon / K) * dipoleX;
+    double DqY_withDSE = qy + (epsilon / K) * dipoleY;
+    double expectedF0x_withDSE = -epsilon * DqX_withDSE;
+    double expectedF0y_withDSE = -epsilon * DqY_withDSE;
+    double expectedF1x_withDSE = epsilon * DqX_withDSE;
+    double expectedF1y_withDSE = epsilon * DqY_withDSE;
+
+    double expectedF0x_noDSE = -epsilon * qx;
+    double expectedF0y_noDSE = -epsilon * qy;
+    double expectedF1x_noDSE = epsilon * qx;
+    double expectedF1y_noDSE = epsilon * qy;
+
+    // After subtracting lambda=0 baseline, cavity force is only the coupling term.
+    double expectedFcavCouplingX = -epsilon * dipoleX;
+    double expectedFcavCouplingY = -epsilon * dipoleY;
+
+    struct CaseResult {
+        vector<Vec3> forces;
+        double harmonic;
+        double coupling;
+        double dipoleSelf;
+    };
+
+    auto runCase = [&](bool includeDSE, double lambdaValue) -> CaseResult {
+        System system;
+        VerletIntegrator integrator(0.001);
+        NonbondedForce* nonbonded = new NonbondedForce();
+        nonbonded->setNonbondedMethod(NonbondedForce::NoCutoff);
+
+        system.addParticle(12.0);
+        nonbonded->addParticle(1.0, 0.0, 0.0);
+        system.addParticle(12.0);
+        nonbonded->addParticle(-1.0, 0.0, 0.0);
+        system.addParticle(photonMass);
+        nonbonded->addParticle(0.0, 0.0, 0.0);
+        system.addForce(nonbonded);
+
+        CavityForce* cavityForce = new CavityForce(2, omegac, lambdaValue, photonMass);
+        cavityForce->setIncludeDipoleSelfEnergy(includeDSE);
+        system.addForce(cavityForce);
+
+        Context context(system, integrator, platform);
+        vector<Vec3> positions(3);
+        positions[0] = Vec3(1.0, 0.0, 0.0);
+        positions[1] = Vec3(-1.0, 0.0, 0.0);
+        positions[2] = Vec3(0.5, 0.5, 0.0);
+        context.setPositions(positions);
+
+        context.getState(State::Energy | State::Forces);
+        CaseResult result;
+        result.forces = context.getState(State::Forces).getForces();
+        result.harmonic = cavityForce->getHarmonicEnergy(context);
+        result.coupling = cavityForce->getCouplingEnergy(context);
+        result.dipoleSelf = cavityForce->getDipoleSelfEnergy(context);
+        return result;
+    };
+
+    CaseResult baseline = runCase(true, 0.0);
+    CaseResult onResult = runCase(true, lambda);
+    CaseResult offResult = runCase(false, lambda);
+
+    auto cavityForceOnly = [&](const CaseResult& total, const CaseResult& base, int idx) {
+        return Vec3(total.forces[idx][0] - base.forces[idx][0],
+                      total.forces[idx][1] - base.forces[idx][1],
+                      total.forces[idx][2] - base.forces[idx][2]);
+    };
+
+    Vec3 f0_on = cavityForceOnly(onResult, baseline, 0);
+    Vec3 f1_on = cavityForceOnly(onResult, baseline, 1);
+    Vec3 fcav_on = cavityForceOnly(onResult, baseline, 2);
+
+    Vec3 f0_off = cavityForceOnly(offResult, baseline, 0);
+    Vec3 f1_off = cavityForceOnly(offResult, baseline, 1);
+    Vec3 fcav_off = cavityForceOnly(offResult, baseline, 2);
+
+    ASSERT_EQUAL_TOL(expectedHarmonic, onResult.harmonic, 1e-4);
+    ASSERT_EQUAL_TOL(expectedCoupling, onResult.coupling, 1e-4);
+    ASSERT_EQUAL_TOL(expectedDSE, onResult.dipoleSelf, 0.2);
+    ASSERT_EQUAL_TOL(expectedF0x_withDSE, f0_on[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF0y_withDSE, f0_on[1], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF1x_withDSE, f1_on[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF1y_withDSE, f1_on[1], 1e-4);
+    ASSERT_EQUAL_TOL(expectedFcavCouplingX, fcav_on[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedFcavCouplingY, fcav_on[1], 1e-4);
+
+    ASSERT_EQUAL_TOL(0.0, offResult.dipoleSelf, 1e-10);
+    ASSERT_EQUAL_TOL(expectedHarmonic + expectedCoupling, offResult.harmonic + offResult.coupling, 1e-4);
+    ASSERT_EQUAL_TOL(expectedF0x_noDSE, f0_off[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF0y_noDSE, f0_off[1], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF1x_noDSE, f1_off[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedF1y_noDSE, f1_off[1], 1e-4);
+    ASSERT_EQUAL_TOL(expectedFcavCouplingX, fcav_off[0], 1e-4);
+    ASSERT_EQUAL_TOL(expectedFcavCouplingY, fcav_off[1], 1e-4);
+}
+
+/**
+ * Test MultiModeCavityForce dipole self-energy toggle (single mode).
+ */
+void testMultiModeDipoleSelfEnergyToggle() {
+    const double omega1 = 0.01;
+    const double lambda1 = 0.5;
+    const double cavityLength = 2.0;
+    const double moleculeZ = 1.0;
+    const double photonMass = 1.0 / 1822.888;
+
+    System system;
+    VerletIntegrator integrator(0.001);
+    NonbondedForce* nonbonded = new NonbondedForce();
+    nonbonded->setNonbondedMethod(NonbondedForce::NoCutoff);
+
+    system.addParticle(12.0);
+    nonbonded->addParticle(1.0, 0.0, 0.0);
+    system.addParticle(12.0);
+    nonbonded->addParticle(-1.0, 0.0, 0.0);
+    system.addParticle(photonMass);
+    nonbonded->addParticle(0.0, 0.0, 0.0);
+    system.addForce(nonbonded);
+
+    MultiModeCavityForce* mmForce = new MultiModeCavityForce(1, omega1, lambda1, cavityLength, moleculeZ, photonMass);
+    mmForce->setIncludeDipoleSelfEnergy(false);
+    mmForce->addCavityParticle(2);
+    system.addForce(mmForce);
+
+    Context context(system, integrator, platform);
+    vector<Vec3> positions(3);
+    positions[0] = Vec3(1.0, 0.0, moleculeZ);
+    positions[1] = Vec3(-1.0, 0.0, moleculeZ);
+    positions[2] = Vec3(0.5, 0.5, 0.0);
+    context.setPositions(positions);
+
+    context.getState(State::Energy);
+    ASSERT_EQUAL_TOL(0.0, mmForce->getDipoleSelfEnergy(context), 1e-6);
+    ASSERT(!mmForce->getIncludeDipoleSelfEnergy());
+}
+
+/**
  * Test time-varying coupling schedule.
  */
 void testCouplingSchedule() {
@@ -317,6 +481,8 @@ int main(int argc, char* argv[]) {
         initializeTests(argc, argv);
         testCavityEnergy();
         testCavityForces();
+        testDipoleSelfEnergyToggle();
+        testMultiModeDipoleSelfEnergyToggle();
         testCouplingSchedule();
         testCavityDisplacer();
         runPlatformTests();

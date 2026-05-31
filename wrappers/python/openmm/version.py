@@ -5,7 +5,7 @@ version = '@OPENMM_MAJOR_VERSION@.@OPENMM_MINOR_VERSION@.@OPENMM_BUILD_VERSION@'
 full_version = '@OPENMM_MAJOR_VERSION@.@OPENMM_MINOR_VERSION@.@OPENMM_BUILD_VERSION@.dev-Unknown'
 git_revision = 'Unknown'
 release = False
-openmm_library_path = r'/home/mh7373/miniconda3/lib'
+openmm_library_path = r'/media/extradrive/Trajectories/openmm/build-rpmd-test'
 
 if not release:
     version = full_version

@@ -9,6 +9,8 @@ import pytest
 from openmm import Context, HarmonicBondForce, NonbondedForce, Platform, RPMDIntegrator, System
 from openmm import unit
 
+from rpmd_test_utils import periodic_box_volume_nm3
+
 try:
     from openmm import RPMDStochasticCellRescalingBarostat as RPMDStochasticCellRescalingBarostat
 except ImportError:
@@ -74,12 +76,10 @@ def test_scr_runs_finite_volume():
         )
 
     st0 = context.getState()
-    v0 = st0.getPeriodicBoxVectors()
-    vol0 = v0[0][0] * v0[1][1] * v0[2][2]
+    vol0 = periodic_box_volume_nm3(st0)
     integrator.step(400)
     st1 = context.getState()
-    v1 = st1.getPeriodicBoxVectors()
-    vol1 = v1[0][0] * v1[1][1] * v1[2][2]
+    vol1 = periodic_box_volume_nm3(st1)
     assert vol0 > 0 and vol1 > 0
     assert math.isfinite(vol1)
     assert abs(vol1 - vol0) / vol0 < 0.5

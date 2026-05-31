@@ -4,16 +4,18 @@ This directory contains simulations of a two-component diatomic dimer system (O-
 
 ## Install (OpenMM from this repo)
 
-To run `run_simulation.py` you need OpenMM built and installed from this repository (with CavityForce and Bussi thermostat). From the repo root:
+To run `run_simulation.py` you need OpenMM built from this repository (with CavityForce and Bussi thermostat). From the repo root:
 
 ```bash
-# Optional: use a conda env
-conda activate base
-# Full build + install (OpenMM, optional Fairchem/openmm-ml); see scripts/README_INSTALL_BASE.md
-bash scripts/install_openmm_fairchem_base.sh
+pixi install
+pixi run smoke
+# Linux + NVIDIA GPU, if CUDA fails with error 222:
+pixi run -e test fix-cuda && pixi run -e test smoke
 ```
 
-If you only need OpenMM (no Fairchem): configure and build OpenMM, then `make install` and install the Python package from `build/python` (e.g. `pip install build/python`). The script uses CUDA when available and falls back to Reference (CPU) otherwise.
+Optional ML potentials: `pixi install -e ml && pixi run -e ml install-ml`. See [docs/BUILD_AND_REINSTALL.md](../../docs/BUILD_AND_REINSTALL.md).
+
+The script uses CUDA when available and falls back to Reference (CPU) otherwise.
 
 ## System Parameters
 

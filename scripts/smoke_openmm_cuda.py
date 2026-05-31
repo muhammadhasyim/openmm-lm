@@ -254,8 +254,8 @@ def main() -> int:
             print(
                 "  Hints: If libcuda shows 0 devices, fix visibility/driver. "
                 "If cuCtxCreate fails with 222 → PTX newer than driver can JIT. "
-                "If torch works but OpenMM fails with a different error → rebuild OpenMM CUDA "
-                "(see install_openmm_fairchem_base.sh).",
+                "If torch works but OpenMM fails with a different error → rebuild the CUDA plugin "
+                "(pixi run -e test fix-cuda; see docs/BUILD_AND_REINSTALL.md).",
                 file=sys.stderr,
             )
         return 1

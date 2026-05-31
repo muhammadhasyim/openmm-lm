@@ -1,0 +1,15 @@
+# Install hook for pixi-build-cmake / conda packaging.
+# Link against libraries in the CMake build tree (already built by ninja).
+set(ENV{OPENMM_INCLUDE_PATH} "@WRAPPER_INCLUDE_DIRS@")
+set(ENV{OPENMM_LIB_PATH} "@CMAKE_BINARY_DIR@")
+message("OPENMM_LIB_PATH (install) = " $ENV{OPENMM_LIB_PATH})
+
+execute_process(
+    COMMAND "@PYTHON_EXECUTABLE@" -m pip install . --no-build-isolation --no-deps
+    WORKING_DIRECTORY "@PYTHON_PACKAGE_DIR@"
+    RESULT_VARIABLE _openmm_py_setup_result
+)
+
+if(NOT _openmm_py_setup_result EQUAL 0)
+    message(FATAL_ERROR "OpenMM Python setup failed (exit code ${_openmm_py_setup_result})")
+endif()

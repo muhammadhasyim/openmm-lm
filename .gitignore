@@ -1,4 +1,6 @@
 forcebalance/
+.pixi/
+openmm-*.conda
 __pycache__
 build*
 build?

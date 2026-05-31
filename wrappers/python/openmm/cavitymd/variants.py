@@ -277,3 +277,154 @@ class AdaptiveSquareWaveVariant(CouplingVariant):
     @property
     def amplitude_history(self) -> List[Dict]:
         return list(self._amplitude_history)
+
+
+class ExponentialDecayVariant(CouplingVariant):
+    """Exponential decay from an initial amplitude after turn-on."""
+
+    def __init__(
+        self,
+        amplitude: float,
+        decay_time_constant_ps: float,
+        turn_on_time_ps: float = 0.0,
+        turn_off_time_ps: Optional[float] = None,
+    ) -> None:
+        self._amplitude = float(amplitude)
+        self.decay_time_constant_ps = float(decay_time_constant_ps)
+        self.turn_on_time_ps = float(turn_on_time_ps)
+        self.turn_off_time_ps = (
+            float(turn_off_time_ps) if turn_off_time_ps is not None else None
+        )
+
+    def evaluate(self, time_ps: float) -> float:
+        if time_ps < self.turn_on_time_ps:
+            return 0.0
+        if self.turn_off_time_ps is not None and time_ps >= self.turn_off_time_ps:
+            return 0.0
+        dt = time_ps - self.turn_on_time_ps
+        return self._amplitude * math.exp(-dt / self.decay_time_constant_ps)
+
+    @property
+    def target_value(self) -> float:
+        return self._amplitude
+
+
+class DecayingSquareWaveVariant(CouplingVariant):
+    """Square wave with amplitude A_n = A0 * (1-r)^n after each period."""
+
+    def __init__(
+        self,
+        initial_amplitude: float,
+        period_ps: float,
+        decay_rate_per_period: float = 0.0,
+        duty_cycle: float = 0.5,
+        start_time_ps: float = 0.0,
+        stop_time_ps: Optional[float] = None,
+        minimum_amplitude: float = 1e-8,
+    ) -> None:
+        if not 0.0 <= duty_cycle <= 1.0:
+            raise ValueError(f"duty_cycle must be in [0,1], got {duty_cycle}")
+        if not 0.0 <= decay_rate_per_period <= 1.0:
+            raise ValueError(
+                f"decay_rate_per_period must be in [0,1], got {decay_rate_per_period}"
+            )
+        self._initial_amplitude = float(initial_amplitude)
+        self.current_amplitude = float(initial_amplitude)
+        self.period_ps = float(period_ps)
+        self.decay_rate_per_period = float(decay_rate_per_period)
+        self.duty_cycle = float(duty_cycle)
+        self.start_time_ps = float(start_time_ps)
+        self.stop_time_ps = (
+            float(stop_time_ps) if stop_time_ps is not None else None
+        )
+        self.minimum_amplitude = float(minimum_amplitude)
+        self._completed_periods = 0
+
+    def evaluate(self, time_ps: float) -> float:
+        if time_ps < self.start_time_ps:
+            return 0.0
+        if self.stop_time_ps is not None and time_ps >= self.stop_time_ps:
+            return 0.0
+
+        dt = time_ps - self.start_time_ps
+        period_index = int(dt / self.period_ps)
+        if period_index > self._completed_periods:
+            for _ in range(period_index - self._completed_periods):
+                self.current_amplitude *= 1.0 - self.decay_rate_per_period
+            self._completed_periods = period_index
+
+        if self.current_amplitude < self.minimum_amplitude:
+            return 0.0
+
+        phase = (dt / self.period_ps) % 1.0
+        return self.current_amplitude if phase < self.duty_cycle else 0.0
+
+    @property
+    def target_value(self) -> float:
+        return self._initial_amplitude
+
+
+class SinusoidVariant(CouplingVariant):
+    """Sinusoidal coupling: A * (1 + sin(2*pi*dt/period + phase)) / 2."""
+
+    def __init__(
+        self,
+        amplitude: float,
+        period_ps: float,
+        phase_offset: float = 0.0,
+        start_time_ps: float = 0.0,
+        stop_time_ps: Optional[float] = None,
+    ) -> None:
+        self._amplitude = float(amplitude)
+        self.period_ps = float(period_ps)
+        self.phase_offset = float(phase_offset)
+        self.start_time_ps = float(start_time_ps)
+        self.stop_time_ps = (
+            float(stop_time_ps) if stop_time_ps is not None else None
+        )
+
+    def evaluate(self, time_ps: float) -> float:
+        if time_ps < self.start_time_ps:
+            return 0.0
+        if self.stop_time_ps is not None and time_ps >= self.stop_time_ps:
+            return 0.0
+        dt = time_ps - self.start_time_ps
+        phase = 2.0 * math.pi * dt / self.period_ps + self.phase_offset
+        return self._amplitude * (1.0 + math.sin(phase)) / 2.0
+
+    @property
+    def target_value(self) -> float:
+        return self._amplitude
+
+
+class ExponentialWaveVariant(CouplingVariant):
+    """Periodic exponential pulses: A * exp(-t_in_period / tau) each period."""
+
+    def __init__(
+        self,
+        amplitude: float,
+        period_ps: float,
+        decay_tau_ps: float,
+        start_time_ps: float = 0.0,
+        stop_time_ps: Optional[float] = None,
+    ) -> None:
+        self._amplitude = float(amplitude)
+        self.period_ps = float(period_ps)
+        self.decay_tau_ps = float(decay_tau_ps)
+        self.start_time_ps = float(start_time_ps)
+        self.stop_time_ps = (
+            float(stop_time_ps) if stop_time_ps is not None else None
+        )
+
+    def evaluate(self, time_ps: float) -> float:
+        if time_ps < self.start_time_ps:
+            return 0.0
+        if self.stop_time_ps is not None and time_ps >= self.stop_time_ps:
+            return 0.0
+        dt = time_ps - self.start_time_ps
+        t_in_period = dt % self.period_ps
+        return self._amplitude * math.exp(-t_in_period / self.decay_tau_ps)
+
+    @property
+    def target_value(self) -> float:
+        return self._amplitude

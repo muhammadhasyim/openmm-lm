@@ -163,7 +163,7 @@ KERNEL void computeMultiModeForces(GLOBAL const real4* RESTRICT posq,
         int modulationEnabled,
         float modPeriodPs, float modDutyCycle,
         float modStartTimePs, float modStopTimePs, float time_ps,
-        float omega1, float conversionFactor, float photonMassAu) {
+        float omega1, float conversionFactor, float photonMassAu, int includeDSE) {
 
     const float HARTREE_TO_KJMOL = 2625.4996f;
     const float BOHR_TO_NM = 0.052917721f;
@@ -229,7 +229,7 @@ KERNEL void computeMultiModeForces(GLOBAL const real4* RESTRICT posq,
         }
 
         float useDSE = modulationEnabled ? dynamicDSEPrefactor : dsePrefactor;
-        float dipoleSelfTotal = useDSE * (dipoleX*dipoleX + dipoleY*dipoleY);
+        float dipoleSelfTotal = includeDSE ? useDSE * (dipoleX*dipoleX + dipoleY*dipoleY) : 0.0f;
 
         energyBuffer[0] = harmonicTotal;
         energyBuffer[1] = couplingTotal;
@@ -263,7 +263,7 @@ KERNEL void computeMultiModeForces(GLOBAL const real4* RESTRICT posq,
                 float qx = posWrapped.x - offset.x * periodicBoxVecX.x - offset.y * periodicBoxVecY.x - offset.z * periodicBoxVecZ.x;
                 float qy = posWrapped.y - offset.x * periodicBoxVecX.y - offset.y * periodicBoxVecY.y - offset.z * periodicBoxVecZ.y;
 
-                float epsfOverK_n = (K_n > 0.0f) ? (epsf_n / K_n) : 0.0f;
+                float epsfOverK_n = (includeDSE && K_n > 0.0f) ? (epsf_n / K_n) : 0.0f;
                 float DqX = qx + epsfOverK_n * dipoleX;
                 float DqY = qy + epsfOverK_n * dipoleY;
 

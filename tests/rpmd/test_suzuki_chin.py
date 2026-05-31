@@ -9,6 +9,8 @@ import pytest
 from openmm import Context, HarmonicBondForce, Platform, RPMDIntegrator, System
 from openmm import unit
 
+from rpmd_test_utils import is_finite_energy, rpmd_total_energy_kjmol
+
 if not hasattr(RPMDIntegrator, "setSuzukiChinEnabled"):
     pytest.skip("Extended RPMD API (Suzuki-Chin) not available", allow_module_level=True)
 
@@ -55,7 +57,7 @@ def test_suzuki_chin_forces_finite():
 
     for _ in range(20):
         integrator.step(1)
-        e = integrator.getTotalEnergy()
+        e = rpmd_total_energy_kjmol(integrator)
         assert math.isfinite(e)
         st = integrator.getState(0, getForces=True)
         f = st.getForces(asNumpy=True).value_in_unit(unit.kilojoule_per_mole / unit.nanometer)
@@ -82,4 +84,4 @@ def test_suzuki_chin_disabled_matches_toggle():
         ]
         integrator.setPositions(bead, pos)
     integrator.step(15)
-    assert math.isfinite(integrator.getTotalEnergy())
+    assert is_finite_energy(integrator)

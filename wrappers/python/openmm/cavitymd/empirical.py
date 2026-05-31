@@ -200,3 +200,32 @@ class EmpiricalTemperatureData:
             "extended_harmonic": self.extended_harmonic_fit,
             "extended_t35": self.extended_t35_fit,
         }
+
+    def check_inversion_at_calibration_points(self, tol_K: float = 15.0) -> bool:
+        """Invert fitted curves at calibration energies; warn if T_recovered differs."""
+        if self.temperatures is None or self.energies is None:
+            return True
+
+        issues = []
+        for T_cal, E_cal in zip(self.temperatures, self.energies):
+            T_inv = self.calculate_temperature(float(E_cal))
+            if T_inv <= 0:
+                issues.append(f"T_cal={T_cal:.1f} K: inversion returned {T_inv:.1f} K")
+                continue
+            if abs(T_inv - T_cal) > tol_K:
+                issues.append(
+                    f"T_cal={T_cal:.1f} K: inverted T={T_inv:.1f} K (Δ={T_inv - T_cal:+.1f} K)"
+                )
+
+        if issues:
+            label = self.energy_component
+            print(f"WARNING: {label} inversion check failed at {len(issues)} points:")
+            for issue in issues[:8]:
+                print(f"  {issue}")
+            return False
+
+        print(
+            f"  {self.energy_component} inversion check passed "
+            f"({len(self.temperatures)} calibration points, tol={tol_K:.0f} K)"
+        )
+        return True

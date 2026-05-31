@@ -19,9 +19,11 @@ Protocol:
 """
 
 import argparse
+import os
 import sys
 import time as wall_time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
@@ -39,9 +41,28 @@ from openmm.cavitymd import (
     TemperatureTracker,
     ElapsedTimeTracker,
     DualThermostat,
+    DiffEqController,
+    SimpleSetpointController,
+    PIDControl,
+    GradientDescentFeedback,
     assign_force_groups,
+    create_adaptive_integrator,
+    advance_to_time,
+    square_wave_on,
+    DT_MAX_PS,
+    compute_harmonic_bond_energy_kjmol,
     setup_gpu_adaptive_square_wave,
+    setup_gpu_square_wave,
+    setup_gpu_decaying_square_wave,
+    setup_gpu_sinusoid,
+    setup_gpu_exponential_wave,
+    run_legacy_equilibrium_calibration as run_equilibrium_calibration,
+    validate_calibration_file,
+    crosscheck_calibration_against_reference,
 )
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+REFERENCE_CALIBRATION_FILE = _SCRIPT_DIR / "reference_potential_energy_vs_T.txt"
 
 # ---------------------------------------------------------------------------
 #  Physical constants & unit conversions
@@ -85,6 +106,32 @@ PHOTON_MASS_AMU = 1.0 / 1822.888  # 1 a.u. mass in amu
 # Thermostat
 BUSSI_TAU_PS = 1.0  # Bussi time constant (paper: tau_b = 1 ps)
 
+# Platform preference order when auto-selecting
+_PLATFORM_PREFERENCE = ("CUDA", "CPU", "Reference")
+
+
+def _select_platform(platform_name=None):
+    """Return an OpenMM Platform, honoring OPENMM_PLATFORM and --platform.
+
+    When *platform_name* is None, uses ``OPENMM_PLATFORM`` if set, otherwise
+    tries CUDA, then CPU, then Reference.
+    """
+    name = platform_name or os.environ.get("OPENMM_PLATFORM")
+    if name:
+        platform = openmm.Platform.getPlatformByName(name)
+        print(f"Using OpenMM platform: {platform.getName()}")
+        return platform
+
+    for candidate in _PLATFORM_PREFERENCE:
+        try:
+            platform = openmm.Platform.getPlatformByName(candidate)
+            print(f"Using OpenMM platform: {platform.getName()} (auto)")
+            return platform
+        except Exception:
+            continue
+
+    raise RuntimeError("No usable OpenMM platform found (tried CUDA, CPU, Reference)")
+
 
 # ---------------------------------------------------------------------------
 #  Helper: convert force-field parameters to OpenMM units
@@ -104,8 +151,15 @@ def _au_to_openmm_lj(eps_au, sig_au):
 #  STAGE 1 — Build the mKA system
 # ===================================================================
 def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
-                     box_au=BOX_AU, seed=42):
-    """Build the modified Kob-Andersen dipole system from scratch."""
+                     box_au=BOX_AU, seed=42, sample_bonds_at_T=None):
+    """Build the modified Kob-Andersen dipole system from scratch.
+
+    Parameters
+    ----------
+    sample_bonds_at_T : float or None
+        If set, sample bond lengths from Boltzmann distribution at this
+        temperature (K): r ~ N(r0, sqrt(k_B T / k)).
+    """
     np.random.seed(seed)
 
     box_nm = box_au * BOHR_TO_NM
@@ -163,8 +217,17 @@ def build_mka_system(num_molecules=NUM_MOL, frac_aa=FRAC_AA,
                     mass, r0, k_bond = MASS_B, r0_bb, k_bb
                     sig, eps = sig_bb, eps_bb
 
-                r1 = np.array([cx, cy, cz]) - 0.5 * r0 * d
-                r2 = np.array([cx, cy, cz]) + 0.5 * r0 * d
+                center = np.array([cx, cy, cz])
+                if sample_bonds_at_T is not None and sample_bonds_at_T > 0:
+                    sigma_r = np.sqrt(
+                        Units.kelvin_to_kT_kjmol(sample_bonds_at_T) / k_bond
+                    )
+                    r_bond = max(r0 + np.random.normal(0.0, sigma_r), 0.05 * r0)
+                else:
+                    r_bond = r0
+
+                r1 = center - 0.5 * r_bond * d
+                r2 = center + 0.5 * r_bond * d
 
                 idx1 = system.addParticle(mass)
                 idx2 = system.addParticle(mass)
@@ -236,227 +299,296 @@ def initialize_cavity_position(context, cavity_index, temperature_K, omegac_au):
     context.setPositions(pos_list)
 
 
-# ===================================================================
-#  STAGE 2 — Calibration: short equilibrium runs at multiple T
-# ===================================================================
-def run_equilibrium_calibration(system_template_fn, temperatures,
-                                run_ps=50.0, dt_ps=0.001,
-                                output_file="calibration_data.txt"):
-    """Run short NVT equilibrations at each T to collect <V_bond>(T) and <V_LJ+C>(T).
+def equilibrate_nvt(seed, temperature_K, equil_ps, dt_ps=0.001,
+                    platform_name=None, minimize_steps=100,
+                    sample_bonds_at_T=None):
+    """Short NVT equilibration on a standalone system (no cavity).
 
-    Writes a whitespace-separated file with columns:
-        temperature  harmonic_hartree  lj_hartree  coulombic_hartree
+    Builds a fresh mKA system, equilibrates, and returns final positions.
+    The production system is built separately to avoid duplicate thermostats.
     """
-    print("\n=== Stage 2: Equilibrium calibration ===")
-    rows = []
+    if equil_ps <= 0:
+        return None
 
-    for T in temperatures:
-        print(f"\n--- T = {T:.0f} K ---")
-        system, positions, n_mol_particles = system_template_fn()
+    print(f"\n--- NVT pre-equilibration at T={temperature_K:.0f} K for {equil_ps:.1f} ps ---")
+    system, positions, n_atoms = build_mka_system(
+        seed=seed, sample_bonds_at_T=sample_bonds_at_T or temperature_K
+    )
+    mol_indices = list(range(n_atoms))
 
-        # Assign force groups for decomposition
-        group_map = {}
-        for fi in range(system.getNumForces()):
-            f = system.getForce(fi)
-            if isinstance(f, openmm.HarmonicBondForce):
-                f.setForceGroup(1)
-                group_map["harmonic_bond"] = 1
-            elif isinstance(f, openmm.NonbondedForce):
-                f.setForceGroup(0)
-                group_map["nonbonded"] = 0
+    bussi = openmm.BussiThermostat(temperature_K, BUSSI_TAU_PS)
+    bussi.setApplyToAllParticles(False)
+    bussi.setSubtractCMMotion(True)
+    for idx in mol_indices:
+        bussi.addParticle(idx)
+    system.addForce(bussi)
+    assign_force_groups(system)
 
-        # Bussi thermostat on all particles (no cavity at calibration stage)
-        bussi = openmm.BussiThermostat(T, BUSSI_TAU_PS)
-        system.addForce(bussi)
+    integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
+    platform = _select_platform(platform_name)
+    context = openmm.Context(system, integrator, platform)
+    context.setPositions(positions)
+    context.setVelocitiesToTemperature(temperature_K * unit.kelvin)
 
-        integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
-        try:
-            platform = openmm.Platform.getPlatformByName("CUDA")
-        except Exception:
-            platform = openmm.Platform.getPlatformByName("Reference")
+    if minimize_steps > 0:
+        openmm.LocalEnergyMinimizer.minimize(context, maxIterations=minimize_steps)
 
-        context = openmm.Context(system, integrator, platform)
-        context.setPositions(positions)
-        context.setVelocitiesToTemperature(T * unit.kelvin)
+    n_steps = max(1, int(equil_ps / dt_ps))
+    integrator.step(n_steps)
 
-        # Equilibrate 20% of run time
-        equil_steps = int(0.2 * run_ps / dt_ps)
-        integrator.step(equil_steps)
+    state = context.getState(getPositions=True)
+    equil_positions = list(state.getPositions())
+    print(f"  Pre-equilibration complete ({n_steps} steps)")
 
-        # Production: collect averages
-        prod_steps = int(0.8 * run_ps / dt_ps)
-        sample_interval = max(1, int(0.1 / dt_ps))  # sample every 0.1 ps
-        n_samples = prod_steps // sample_interval
-
-        E_bond_samples = []
-        E_nb_samples = []
-
-        for _ in range(n_samples):
-            integrator.step(sample_interval)
-            s_bond = context.getState(getEnergy=True, groups={1 << 1})
-            E_bond_kjmol = s_bond.getPotentialEnergy().value_in_unit(
-                unit.kilojoule_per_mole)
-
-            s_nb = context.getState(getEnergy=True, groups={1 << 0})
-            E_nb_kjmol = s_nb.getPotentialEnergy().value_in_unit(
-                unit.kilojoule_per_mole)
-
-            E_bond_samples.append(E_bond_kjmol * Units.KJMOL_TO_HARTREE)
-            E_nb_samples.append(E_nb_kjmol * Units.KJMOL_TO_HARTREE)
-
-        E_bond_mean = float(np.mean(E_bond_samples))
-        E_nb_mean = float(np.mean(E_nb_samples))
-
-        # OpenMM PME lumps LJ + Coulomb together in NonbondedForce.
-        # For the empirical fit this is fine — we use the combined value.
-        rows.append((T, E_bond_mean, E_nb_mean, 0.0))
-        print(f"  <V_bond> = {E_bond_mean:.6f} Ha,  <V_LJ+C> = {E_nb_mean:.6f} Ha")
-
-        del context, integrator
-
-    # Write calibration file
-    with open(output_file, "w") as f:
-        f.write("temperature  harmonic_hartree  lj_hartree  coulombic_hartree\n")
-        for T, E_b, E_lj, E_c in rows:
-            f.write(f"{T:.1f}  {E_b:.10f}  {E_lj:.10f}  {E_c:.10f}\n")
-
-    print(f"\nCalibration data written to {output_file}")
-    return output_file
+    del context, integrator
+    return equil_positions
 
 
 # ===================================================================
-#  STAGE 3 — C2F production run (GPU-native inner loop)
+#  STAGE 3 — C2F production run (adaptive integration + split-operator)
 #
-#  Architecture:
-#    INNER LOOP (GPU, zero host sync):
-#      The CavityForce kernel evaluates the adaptive square-wave
-#      modulation every MD step.  It reads T_bath from the
-#      "BussiTemperature" context parameter and adapts the amplitude
-#      autonomously at each period boundary.
+#  INNER LOOP (per MD step):
+#    VariableVerletIntegrator with SI error-tolerance ramp on each λ edge,
+#    BussiThermostat (molecules, system force), cavity Langevin (γ=0.5 ps⁻¹).
 #
-#    OUTER LOOP (Python, every feedback_interval_ps):
-#      1. integrator.step(steps_per_interval)  — runs thousands of
-#         uninterrupted MD steps on the GPU
-#      2. getState(getEnergy=True) — single GPU→CPU transfer
-#      3. Compute T_s (structural fictive temperature) from V_LJ+C
-#      4. Update "BussiTemperature" via context.setParameter()
-#      5. Log to CSV
-#
-#  This minimises host synchronisation to ~1 getState() call per
-#  feedback interval (typically every 5-10 ps), compared to the old
-#  design which called Python every 10 fs.
+#  OUTER LOOP (every sample_interval_ps, typically 0.1 ps):
+#    Read energies, compute T_s/T_v, apply DiffEqController bath feedback.
 # ===================================================================
 def run_c2f(
     calibration_file: str,
     initial_temperature_K: float = 300.0,
     cavity_freq_cm1: float = OMEGA_C_CM1,
-    lambda_coupling: float = 0.03,
-    square_wave_period_ps: float = 5.0,
-    square_wave_duty_cycle: float = 0.5,
+    lambda_coupling: float = 0.09,
+    square_wave_period_ps: float = 10.0,
+    square_wave_duty_cycle: float = 0.10,
     coupling_start_ps: float = 20.0,
     runtime_ps: float = 200.0,
     dt_ps: float = 0.001,
-    feedback_interval_ps: float = 5.0,
-    feedback_method: str = "empirical",
+    feedback_interval_ps: float = 0.01,
+    sample_interval_ps: Optional[float] = None,
+    feedback_method: str = "diffeq",
+    lambda_profile: str = "square",
     gd_time_constant_ps: float = 5.0,
     gd_target_temperature_K: float = 50.0,
-    T_min: float = 1.0,
-    T_max_factor: float = 1.5,
+    diffeq_tau_ps: float = 1.0,
+    pid_kp: float = 0.1,
+    pid_ki: float = 0.01,
+    pid_kd: float = 0.0,
+    T_min: float = 0.1,
+    T_max: Optional[float] = None,
+    equil_ps: float = 20.0,
     output_prefix: str = "c2f",
     seed: int = 42,
+    include_dipole_self_energy: bool = True,
+    platform_name=None,
+    adaptive: bool = True,
+    log_dt: bool = False,
 ):
-    """Run the full C2F protocol with GPU-side adaptive square-wave."""
-    print("\n=== Stage 3: C2F production run (GPU-native) ===")
+    """Run the full C2F protocol with SI-accurate adaptive integration."""
+    print("\n=== Stage 3: C2F production run ===")
     print(f"  T_initial        = {initial_temperature_K} K")
-    print(f"  T_target (GD)    = {gd_target_temperature_K} K")
     print(f"  ω_c              = {cavity_freq_cm1} cm⁻¹")
     print(f"  λ                = {lambda_coupling}")
     print(f"  period           = {square_wave_period_ps} ps,  duty = {square_wave_duty_cycle}")
     print(f"  coupling on      = {coupling_start_ps} ps")
     print(f"  runtime          = {runtime_ps} ps")
     print(f"  feedback method  = {feedback_method}")
-    print(f"  feedback interval= {feedback_interval_ps} ps")
+    print(f"  lambda profile   = {lambda_profile}")
+    print(f"  feedback interval = {feedback_interval_ps} ps")
+    if sample_interval_ps is None:
+        sample_interval_ps = feedback_interval_ps
+    print(f"  sample interval  = {sample_interval_ps} ps")
+    print(f"  pre-equil        = {equil_ps} ps")
+    print(f"  adaptive dt      = {adaptive}")
 
     np.random.seed(seed)
     omegac_au = cavity_freq_cm1 / HARTREE_TO_CM1
-    T_max = initial_temperature_K * T_max_factor
 
-    # ---- Build system ----
-    system, positions, n_mol = build_mka_system(seed=seed)
+    # ---- Build molecular system with Boltzmann bond sampling ----
+    equil_positions = None
+    if equil_ps > 0:
+        equil_positions = equilibrate_nvt(
+            seed, initial_temperature_K, equil_ps,
+            dt_ps=dt_ps, platform_name=platform_name,
+            sample_bonds_at_T=initial_temperature_K,
+        )
+
+    system, positions, n_atoms = build_mka_system(
+        seed=seed, sample_bonds_at_T=initial_temperature_K
+    )
+    if equil_positions is not None:
+        positions = equil_positions
+
     cavity_index = add_cavity_particle(system, positions)
 
-    # ---- Add CavityForce with GPU-side adaptive modulation ----
+    # ---- Add CavityForce with GPU-side coupling modulation ----
     cavity_force = openmm.CavityForce(cavity_index, omegac_au, 0.0, PHOTON_MASS_AMU)
+    cavity_force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
+    print(f"  Dipole self-energy: {'ON' if include_dipole_self_energy else 'OFF'}")
 
-    # Configure the kernel to handle square-wave modulation entirely on the GPU.
-    # The kernel reads "BussiTemperature" each step and adapts the amplitude
-    # per-period: g_next = g_target * sqrt(T_target / T_bath).
-    setup_gpu_adaptive_square_wave(
-        cavity_force,
-        target_coupling=lambda_coupling,
-        target_temperature_K=gd_target_temperature_K,
-        period_ps=square_wave_period_ps,
-        duty_cycle=square_wave_duty_cycle,
-        start_time_ps=coupling_start_ps,
-        stop_time_ps=-1.0,
-        min_amplitude=1e-8,
-        max_amplitude=0.15,
-    )
+    if lambda_profile == "adaptive_square":
+        setup_gpu_adaptive_square_wave(
+            cavity_force,
+            target_coupling=lambda_coupling,
+            target_temperature_K=gd_target_temperature_K,
+            period_ps=square_wave_period_ps,
+            duty_cycle=square_wave_duty_cycle,
+            start_time_ps=coupling_start_ps,
+            stop_time_ps=-1.0,
+            min_amplitude=1e-8,
+            max_amplitude=0.15,
+        )
+    elif lambda_profile == "square":
+        setup_gpu_square_wave(
+            cavity_force,
+            amplitude=lambda_coupling,
+            period_ps=square_wave_period_ps,
+            duty_cycle=square_wave_duty_cycle,
+            start_time_ps=coupling_start_ps,
+        )
+    elif lambda_profile == "decaying_square":
+        setup_gpu_decaying_square_wave(
+            cavity_force,
+            initial_amplitude=lambda_coupling,
+            period_ps=square_wave_period_ps,
+            duty_cycle=square_wave_duty_cycle,
+            decay_rate_per_period=0.05,
+            start_time_ps=coupling_start_ps,
+        )
+    elif lambda_profile == "sinusoid":
+        setup_gpu_sinusoid(
+            cavity_force,
+            amplitude=lambda_coupling,
+            period_ps=square_wave_period_ps,
+            start_time_ps=coupling_start_ps,
+        )
+    elif lambda_profile == "exp_wave":
+        setup_gpu_exponential_wave(
+            cavity_force,
+            amplitude=lambda_coupling,
+            period_ps=square_wave_period_ps,
+            decay_tau_ps=square_wave_period_ps * square_wave_duty_cycle,
+            start_time_ps=coupling_start_ps,
+        )
+    else:
+        raise ValueError(f"Unknown lambda profile: {lambda_profile}")
     system.addForce(cavity_force)
 
+    # Displacer: auto step trigger disabled; Python calls displaceToEquilibrium
+    # on each rising λ edge via advance_to_time().
     displacer = openmm.CavityParticleDisplacer(cavity_index, omegac_au, PHOTON_MASS_AMU)
     displacer.setSwitchOnLambda(lambda_coupling)
-    displacer.setSwitchOnStep(int(coupling_start_ps / dt_ps))
+    displacer.setSwitchOnStep(2**31 - 1)
     system.addForce(displacer)
 
-    # ---- Bussi thermostat (molecular particles only) ----
-    mol_indices = list(range(n_mol))
+    mol_indices = list(range(n_atoms))
     DualThermostat.setup_bussi_for_system(
         system, mol_indices, initial_temperature_K, BUSSI_TAU_PS
     )
 
-    # ---- Assign force groups ----
     group_map = assign_force_groups(system)
 
-    # ---- Integrator & Context ----
-    integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
-    try:
-        platform = openmm.Platform.getPlatformByName("CUDA")
-    except Exception:
-        platform = openmm.Platform.getPlatformByName("Reference")
+    if adaptive:
+        integrator = create_adaptive_integrator(DT_MAX_PS)
+    else:
+        integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
+    platform = _select_platform(platform_name)
 
     context = openmm.Context(system, integrator, platform)
     context.setPositions(positions)
     context.setVelocitiesToTemperature(initial_temperature_K * unit.kelvin)
     initialize_cavity_position(context, cavity_index, initial_temperature_K, omegac_au)
 
-    # ---- Energy / temperature trackers (used only at feedback cadence) ----
     energy_tracker = EnergyTracker(
-        context, cavity_force, group_map, n_mol, cavity_index
+        context, cavity_force, group_map, n_atoms, cavity_index
     )
     empirical_structural = EmpiricalTemperatureData(
         calibration_file, energy_component="lj_coulombic"
     )
-    temp_tracker = TemperatureTracker(energy_tracker, n_mol, empirical_structural)
+    empirical_harmonic = EmpiricalTemperatureData(
+        calibration_file, energy_component="harmonic"
+    )
+    temp_tracker = TemperatureTracker(
+        energy_tracker,
+        num_molecular_particles=n_atoms,
+        num_molecules=NUM_MOL,
+        empirical_structural=empirical_structural,
+        empirical_harmonic=empirical_harmonic,
+    )
 
-    # ---- Thermostat wrapper ----
     thermostat = DualThermostat(
         context, system, cavity_index,
         cavity_friction_ps_inv=0.5,
         cavity_temperature_K=initial_temperature_K,
     )
 
-    # ---- Feedback state ----
-    # For "empirical": set T_bath = T_s (structural fictive temperature)
-    # For "gradient_descent": T_bath -= alpha * 0.5 * (T_eff - T_target)
     current_bath_T = initial_temperature_K
-    gd_alpha = feedback_interval_ps / gd_time_constant_ps
 
-    # Sliding window for empirical feedback
+    feedback_controller = None
+    if feedback_method == "diffeq":
+        feedback_controller = DiffEqController(
+            temp_tracker,
+            time_constant_ps=diffeq_tau_ps,
+            update_interval_ps=feedback_interval_ps,
+            T_min=T_min,
+            T_max=T_max,
+            turn_on_time_ps=coupling_start_ps,
+        )
+    elif feedback_method == "setpoint":
+        feedback_controller = SimpleSetpointController(
+            temp_tracker,
+            time_constant_ps=diffeq_tau_ps,
+            update_interval_ps=feedback_interval_ps,
+            T_min=T_min,
+            T_max=T_max,
+            turn_on_time_ps=coupling_start_ps,
+        )
+    elif feedback_method == "pid":
+        pid_Ti = (pid_kp / pid_ki) if pid_ki > 0 else 1e10
+        feedback_controller = PIDControl(
+            temp_tracker,
+            target_temperature=gd_target_temperature_K,
+            Kp=pid_kp,
+            Ti=pid_Ti,
+            Td=pid_kd,
+            update_interval_ps=feedback_interval_ps,
+            T_min=T_min,
+            T_max=T_max,
+            turn_on_time_ps=coupling_start_ps,
+        )
+    elif feedback_method == "gradient_descent":
+        feedback_controller = GradientDescentFeedback(
+            temperature_method="harmonic_equipartition",
+            time_constant_ps=gd_time_constant_ps,
+            target_temperature_K=gd_target_temperature_K,
+            temperature_tracker=temp_tracker,
+            update_interval_ps=feedback_interval_ps,
+            T_min=T_min,
+            T_max=T_max,
+            turn_on_time_ps=coupling_start_ps,
+        )
+
     T_s_window = []
-    T_s_window_max_size = 5  # keep last N measurements (~5 intervals)
+    T_s_window_max_size = 5
+    ts_off_samples: list = []
+    prev_lambda_on_sample = False
 
-    # ---- CSV output ----
+    # t=0 structural fictive temperature bias guard (coupling still off)
+    temps0 = temp_tracker.get_all()
+    T_s0 = temps0.get("structural_fictive")
+    if T_s0 is not None:
+        ts_bias = T_s0 - initial_temperature_K
+        if abs(ts_bias) > 10.0:
+            print(
+                f"  WARNING: t=0 T_s={T_s0:.1f} K vs bath={initial_temperature_K:.1f} K "
+                f"(bias {ts_bias:+.1f} K; expected |bias| < 10 K). "
+                "Consider longer pre-equilibration."
+            )
+        else:
+            print(
+                f"  t=0 T_s={T_s0:.1f} K (bias {ts_bias:+.1f} K vs bath) — OK"
+            )
+
     csv_path = f"{output_prefix}_energies.csv"
     csv_file = open(csv_path, "w")
     csv_file.write(
@@ -465,57 +597,94 @@ def run_c2f(
         "E_cav_harmonic_kjmol,E_cav_coupling_kjmol,E_cav_dse_kjmol\n"
     )
 
-    # ---- Outer feedback loop ----
-    steps_per_interval = max(1, int(feedback_interval_ps / dt_ps))
-    n_intervals = int(runtime_ps / feedback_interval_ps)
+    sample_interval_ps = (
+        sample_interval_ps if sample_interval_ps is not None else feedback_interval_ps
+    )
+    n_samples = max(1, int(round(runtime_ps / sample_interval_ps)))
+    adaptive_state = {"ramp_t0": None, "prev_lambda_on": False}
+    dt_log = []
 
-    print(f"\n  {n_intervals} feedback intervals × {steps_per_interval} MD steps "
-          f"= {n_intervals * steps_per_interval} total steps")
-    print(f"  Host sync cadence: every {feedback_interval_ps} ps "
-          f"({steps_per_interval} steps between getState calls)\n")
+    print(f"\n  {n_samples} sample points every {sample_interval_ps} ps")
+    print(f"  Integration: {'VariableVerlet (SI adaptive)' if adaptive else 'fixed Verlet'}\n")
 
     t0 = wall_time.time()
 
     try:
-        for interval in range(n_intervals):
-            # ---- GPU runs uninterrupted for steps_per_interval ----
-            integrator.step(steps_per_interval)
+        for sample_idx in range(n_samples):
+            target_time_ps = (sample_idx + 1) * sample_interval_ps
+            if target_time_ps > runtime_ps:
+                target_time_ps = runtime_ps
 
-            # ---- Single GPU→CPU transfer: read energies ----
+            if adaptive:
+                dts = advance_to_time(
+                    context, integrator, thermostat, displacer,
+                    lambda_coupling, target_time_ps,
+                    coupling_start_ps, square_wave_period_ps,
+                    square_wave_duty_cycle, adaptive_state, log_dt=log_dt,
+                )
+                if log_dt:
+                    dt_log.extend(dts)
+            else:
+                steps = max(1, int(sample_interval_ps / dt_ps))
+                integrator.step(steps)
+                thermostat.apply_cavity_thermostat_step(
+                    sample_interval_ps if steps == 1 else dt_ps * steps
+                )
+
             time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
             energies = energy_tracker.get_energies()
-            energies_h = energy_tracker.get_energies_hartree()
             temps = temp_tracker.get_all()
 
             T_kin = temps.get("kinetic", 0.0)
             T_v = temps.get("harmonic_equipartition", 0.0)
             T_s = temps.get("structural_fictive")
 
-            # ---- Feedback: update bath temperature ----
-            new_bath_T = current_bath_T  # default: no change
+            lambda_on = square_wave_on(
+                time_ps, coupling_start_ps, square_wave_period_ps, square_wave_duty_cycle
+            )
 
+            new_bath_T = current_bath_T
+
+            # C2F feedback: measure T_s only during λ-off windows; update bath at
+            # each OFF→ON edge using the mean structural signal from the off period.
             if time_ps >= coupling_start_ps:
-                if feedback_method == "empirical" and T_s is not None:
-                    # Set T_bath = windowed average of T_s
-                    T_s_window.append(T_s)
-                    if len(T_s_window) > T_s_window_max_size:
-                        T_s_window.pop(0)
-                    avg_T_s = float(np.mean(T_s_window))
-                    new_bath_T = max(T_min, min(T_max, avg_T_s))
+                if not lambda_on and prev_lambda_on_sample:
+                    ts_off_samples = []
 
-                elif feedback_method == "gradient_descent":
-                    T_meas = T_v if T_v > 0 else T_kin
-                    T_eff = (T_meas + current_bath_T) / 2.0
-                    error = T_eff - gd_target_temperature_K
-                    raw = current_bath_T - gd_alpha * 0.5 * error
-                    new_bath_T = max(T_min, min(T_max, raw))
+                if not lambda_on and T_s is not None:
+                    ts_off_samples.append(T_s)
+
+                if lambda_on and not prev_lambda_on_sample and ts_off_samples:
+                    T_s_mean = float(np.mean(ts_off_samples))
+                    off_window_ps = square_wave_period_ps * (
+                        1.0 - square_wave_duty_cycle
+                    )
+                    if feedback_method == "empirical":
+                        T_s_window.append(T_s_mean)
+                        if len(T_s_window) > T_s_window_max_size:
+                            T_s_window.pop(0)
+                        new_bath_T = max(T_min, float(np.mean(T_s_window)))
+                        if T_max is not None:
+                            new_bath_T = min(T_max, new_bath_T)
+                    elif feedback_controller is not None:
+                        result = feedback_controller.step(
+                            time_ps,
+                            current_bath_T,
+                            signal_override=T_s_mean,
+                            force=True,
+                            dt_ps_override=off_window_ps,
+                        )
+                        if result is not None:
+                            new_bath_T = result
+                    ts_off_samples = []
+
+            prev_lambda_on_sample = lambda_on
 
             if new_bath_T != current_bath_T:
                 thermostat.set_molecular_temperature(new_bath_T)
                 thermostat.set_cavity_temperature(new_bath_T)
                 current_bath_T = new_bath_T
 
-            # ---- Log ----
             T_s_str = f"{T_s:.4f}" if T_s is not None else ""
             csv_file.write(
                 f"{time_ps:.6f},{current_bath_T:.4f},{T_kin:.4f},{T_v:.4f},{T_s_str},"
@@ -527,13 +696,16 @@ def run_c2f(
             )
             csv_file.flush()
 
-            if interval % max(1, n_intervals // 20) == 0:
+            if sample_idx % max(1, n_samples // 20) == 0:
                 elapsed = wall_time.time() - t0
                 rate = time_ps / elapsed if elapsed > 0 else 0
+                dt_str = ""
+                if adaptive and log_dt and dt_log:
+                    dt_str = f"  dt=[{min(dt_log):.2e},{max(dt_log):.2e}] ps"
                 print(f"  t={time_ps:8.2f} ps  T_bath={current_bath_T:7.2f} K  "
                       f"T_kin={T_kin:7.2f} K  T_v={T_v:7.2f} K  "
                       f"T_s={T_s if T_s else 0:7.2f} K  "
-                      f"[{rate:.1f} ps/s]")
+                      f"[{rate:.1f} ps/s]{dt_str}")
     finally:
         csv_file.close()
 
@@ -541,7 +713,6 @@ def run_c2f(
     print(f"\nSimulation complete: {runtime_ps:.1f} ps in {elapsed:.1f} s "
           f"({elapsed / runtime_ps:.2f} s/ps)")
 
-    # ---- Save final snapshot ----
     state = context.getState(getPositions=True, getVelocities=True)
     pos_final = state.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
     vel_final = state.getVelocities(asNumpy=True).value_in_unit(
@@ -565,51 +736,92 @@ def main():
     parser = argparse.ArgumentParser(description="C2F protocol for mKA system")
     parser.add_argument("--skip-calibration", action="store_true",
                         help="Skip Stage 2 if calibration_data.txt already exists")
-    parser.add_argument("--calibration-file", default="calibration_data.txt")
-    parser.add_argument("--calibration-run-ps", type=float, default=50.0,
-                        help="Duration of each calibration run (ps)")
+    parser.add_argument("--calibration-file", default=str(REFERENCE_CALIBRATION_FILE),
+                        help="Empirical calibration for T_s/T_v inversion "
+                             "(default: reference_potential_energy_vs_T.txt)")
+    parser.add_argument("--run-self-calibration", action="store_true",
+                        help="Run legacy self-generated calibration and cross-check vs reference")
+    parser.add_argument("--calibration-run-ps", type=float, default=500.0,
+                        help="Duration of each legacy calibration run (ps); "
+                             "for paper-scale calibration use run_fictive_calibration.py")
+    parser.add_argument("--equil-ps", type=float, default=20.0,
+                        help="NVT pre-equilibration before C2F (ps)")
     parser.add_argument("--initial-T", type=float, default=300.0,
                         help="Initial bath temperature for C2F (K)")
     parser.add_argument("--target-T", type=float, default=50.0,
                         help="GD feedback target temperature (K)")
-    parser.add_argument("--lambda", dest="lam", type=float, default=0.03,
+    parser.add_argument("--lambda", dest="lam", type=float, default=0.09,
                         help="Cavity coupling strength (dimensionless)")
-    parser.add_argument("--period-ps", type=float, default=5.0,
+    parser.add_argument("--period-ps", type=float, default=10.0,
                         help="Square wave period (ps)")
-    parser.add_argument("--duty-cycle", type=float, default=0.5)
+    parser.add_argument("--duty-cycle", type=float, default=0.10)
     parser.add_argument("--coupling-start-ps", type=float, default=20.0,
                         help="When to activate cavity coupling (ps)")
     parser.add_argument("--runtime-ps", type=float, default=200.0)
     parser.add_argument("--dt-ps", type=float, default=0.001,
-                        help="Integration timestep (ps)")
-    parser.add_argument("--feedback-interval-ps", type=float, default=5.0,
-                        help="How often Python reads T_s and updates T_bath (ps)")
-    parser.add_argument("--feedback", choices=["gradient_descent", "empirical"],
-                        default="empirical")
+                        help="Nominal integration timestep (ps)")
+    parser.add_argument("--feedback-interval-ps", type=float, default=0.1,
+                        help="Sample/feedback interval (ps)")
+    parser.add_argument("--feedback", choices=[
+        "empirical", "gradient_descent", "diffeq", "setpoint", "pid",
+    ], default="diffeq")
+    parser.add_argument("--lambda-profile", choices=[
+        "adaptive_square", "square", "decaying_square", "sinusoid", "exp_wave",
+    ], default="square",
+                        help="GPU-side coupling modulation profile")
+    parser.add_argument("--no-adaptive", action="store_true",
+                        help="Use fixed VerletIntegrator instead of adaptive")
+    parser.add_argument("--log-dt", action="store_true",
+                        help="Log adaptive dt range during production")
+    parser.add_argument("--diffeq-tau-ps", type=float, default=1.0,
+                        help="DiffEq/setpoint controller time constant (ps)")
+    parser.add_argument("--pid-kp", type=float, default=0.1)
+    parser.add_argument("--pid-ki", type=float, default=0.01)
+    parser.add_argument("--pid-kd", type=float, default=0.0)
     parser.add_argument("--gd-tau-ps", type=float, default=5.0,
                         help="GD controller time constant (ps)")
+    parser.add_argument("--no-dipole-self-energy", action="store_true",
+                        help="Disable dipole self-energy (self-polarization) term in CavityForce")
     parser.add_argument("--output-prefix", default="c2f")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--platform", default=None,
+                        help="OpenMM platform (CUDA, CPU, Reference). "
+                             "Default: auto (CUDA > CPU > Reference). "
+                             "Also respects OPENMM_PLATFORM env var.")
     args = parser.parse_args()
 
     # --- Stage 2: calibration ---
     cal_path = Path(args.calibration_file)
-    if not args.skip_calibration or not cal_path.exists():
+    if args.run_self_calibration:
+        self_cal_path = cal_path.parent / "self_calibration_data.txt"
         calibration_temps = np.array([
             30, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500
         ], dtype=float)
 
-        def _make_system():
-            return build_mka_system(seed=args.seed)
+        def _make_system(T=None):
+            return build_mka_system(
+                seed=args.seed,
+                sample_bonds_at_T=T if T is not None else args.initial_T,
+            )
 
         run_equilibrium_calibration(
             _make_system, calibration_temps,
             run_ps=args.calibration_run_ps,
             dt_ps=args.dt_ps,
-            output_file=args.calibration_file,
+            output_file=str(self_cal_path),
+            platform_name=args.platform,
         )
-    else:
-        print(f"Using existing calibration: {args.calibration_file}")
+        validate_calibration_file(self_cal_path)
+        if REFERENCE_CALIBRATION_FILE.exists():
+            crosscheck_calibration_against_reference(
+                self_cal_path, REFERENCE_CALIBRATION_FILE
+            )
+    elif not args.skip_calibration and not cal_path.exists():
+        print(f"WARNING: calibration file not found: {cal_path}")
+        print(f"  Expected reference at {REFERENCE_CALIBRATION_FILE}")
+    elif cal_path.exists():
+        print(f"Using calibration: {cal_path}")
+        validate_calibration_file(cal_path)
 
     # --- Stage 3: C2F production ---
     run_c2f(
@@ -623,10 +835,20 @@ def main():
         dt_ps=args.dt_ps,
         feedback_interval_ps=args.feedback_interval_ps,
         feedback_method=args.feedback,
+        lambda_profile=args.lambda_profile,
         gd_time_constant_ps=args.gd_tau_ps,
         gd_target_temperature_K=args.target_T,
+        diffeq_tau_ps=args.diffeq_tau_ps,
+        pid_kp=args.pid_kp,
+        pid_ki=args.pid_ki,
+        pid_kd=args.pid_kd,
         output_prefix=args.output_prefix,
         seed=args.seed,
+        include_dipole_self_energy=not args.no_dipole_self_energy,
+        platform_name=args.platform,
+        equil_ps=args.equil_ps,
+        adaptive=not args.no_adaptive,
+        log_dt=args.log_dt,
     )
 
 

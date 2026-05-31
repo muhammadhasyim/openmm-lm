@@ -290,6 +290,16 @@ class UMAPotentialPythonForceBatchedImpl(MLPotentialImpl):
         # Import modules once for closure scope
         from fairchem.core.datasets.atomic_data import atomicdata_list_to_batch
 
+        def _scatter_ml_forces_for_system(molecular_forces, num_system_particles):
+            """Pack ML forces into (num_system_particles, 3); non-ML rows stay zero."""
+            forces_out = np.zeros((num_system_particles, 3), dtype=np.float64)
+            if atom_indices is not None:
+                for j, atom_idx in enumerate(atom_indices):
+                    forces_out[atom_idx] = molecular_forces[j]
+            else:
+                forces_out[:n_atoms] = molecular_forces
+            return forces_out
+
         # Single-copy computation function
         def compute_uma_forces_single(state):
             """Compute forces for a single copy - use shared CUDA context with OpenMM."""
@@ -359,16 +369,8 @@ class UMAPotentialPythonForceBatchedImpl(MLPotentialImpl):
                     forces_ev_ang * EV_ANG_TO_KJ_NM, dtype=np.float64
                 )
 
-                if cache['full_forces_buffer'] is not None:
-                    forces_kj_nm = cache['full_forces_buffer'].copy()
-                    forces_kj_nm.fill(0.0)
-                    if atom_indices is not None:
-                        for i, atom_idx in enumerate(atom_indices):
-                            forces_kj_nm[atom_idx] = molecular_forces[i]
-                    else:
-                        forces_kj_nm[:n_atoms] = molecular_forces
-                else:
-                    forces_kj_nm = molecular_forces
+                n_out = all_pos_nm.shape[0]
+                forces_kj_nm = _scatter_ml_forces_for_system(molecular_forces, n_out)
 
                 return (energy_kj * unit.kilojoules_per_mole,
                         forces_kj_nm * unit.kilojoules_per_mole / unit.nanometer)
@@ -390,7 +392,8 @@ class UMAPotentialPythonForceBatchedImpl(MLPotentialImpl):
                 batch_start = time.time()
                 
                 num_copies = len(states)
-                
+                n_out = states[0].getPositions(asNumpy=True).shape[0]
+
                 if cache['batch_pos_buffer'] is None or cache['max_beads'] < num_copies:
                     cache['batch_pos_buffer'] = np.zeros((num_copies, n_atoms, 3), dtype=np.float64)
                     cache['batch_box_buffer'] = np.zeros((num_copies, 3, 3), dtype=np.float64)
@@ -501,18 +504,9 @@ class UMAPotentialPythonForceBatchedImpl(MLPotentialImpl):
                         forces_kj_nm = np.asarray(
                             forces_ev_ang_i * EV_ANG_TO_KJ_NM, dtype=np.float64
                         )
-
-                        if cache['full_forces_buffer'] is not None:
-                            forces_full = cache['full_forces_buffer'].copy()
-                            forces_full.fill(0.0)
-                            if atom_indices is not None:
-                                for j, atom_idx in enumerate(atom_indices):
-                                    forces_full[atom_idx] = forces_kj_nm[j]
-                            else:
-                                forces_full[:n_atoms] = forces_kj_nm
-                            forces_kj_nm_list.append(forces_full)
-                        else:
-                            forces_kj_nm_list.append(forces_kj_nm)
+                        forces_kj_nm_list.append(
+                            _scatter_ml_forces_for_system(forces_kj_nm, n_out)
+                        )
 
                 t_inference = time.time() - t_inference_start
 

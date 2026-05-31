@@ -775,7 +775,8 @@ def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
              fkt_output_period_ps=1.0, fkt_output_prefix=None,
              nve=False, bussi_tau_ps=5.0,
              initial_gsd=None, initial_gsd_frame=-1, gsd_in_nm=False, no_cavity=False,
-             cutoff_nm=DIAMER_RCUT_NM, switch_time_ps=None):
+             cutoff_nm=DIAMER_RCUT_NM, switch_time_ps=None,
+             include_dipole_self_energy=True):
     """Run the cavity diamer simulation test.
     If nve=True: NVE (microcanonical) with Verlet; initial velocities thermalized at temperature_K.
     If nve=False: Verlet + Bussi (molecules only), cav-hoomd parity; default Bussi tau 5.0 ps.
@@ -967,6 +968,7 @@ def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
             else:
                 cavity_force = openmm.CavityForce(cavity_index, omegac_au, lambda_coupling, photon_mass)
             system.addForce(cavity_force)
+            cavity_force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
             print(f"  CavityForce added successfully")
             print(f"  Omega_c: {omegac_au:.6f} a.u.")
             print(f"  Photon mass: {photon_mass:.6f} amu = {photon_mass * 1822.888:.1f} a.u.")
@@ -979,6 +981,7 @@ def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
                 print(f"  Lambda coupling: {lambda_coupling} (DELAYED, activates at step {switch_step} = {switch_time_ps} ps)")
             else:
                 print(f"  Lambda coupling: {lambda_coupling} (ACTIVE from t=0)")
+            print(f"  Dipole self-energy: {'ON' if include_dipole_self_energy else 'OFF'}")
             displacer = openmm.CavityParticleDisplacer(cavity_index, omegac_au, photon_mass)
             displacer.setSwitchOnLambda(lambda_coupling)
             if delayed:
@@ -1463,6 +1466,8 @@ Examples:
                         help='Langevin friction in ps⁻¹ (default: 0.01)')
     parser.add_argument('--no-minimize', action='store_true',
                         help='Skip energy minimization')
+    parser.add_argument('--no-dipole-self-energy', action='store_true',
+                        help='Disable dipole self-energy (self-polarization) term in CavityForce')
     parser.add_argument('--no-dipole', action='store_true', dest='no_dipole',
                         help='Disable dipole output for speed benchmark')
     parser.add_argument('--nve', action='store_true',
@@ -1560,6 +1565,7 @@ Examples:
             no_cavity=args.no_cavity,
             switch_time_ps=args.switch_time_ps,
             cutoff_nm=args.cutoff_nm,
+            include_dipole_self_energy=not args.no_dipole_self_energy,
         )
         sys.exit(0 if success else 1)
     except Exception as e:

@@ -7,6 +7,7 @@ from .trackers import ElapsedTimeTracker, EnergyTracker, TemperatureTracker
 from .thermostats import DualThermostat
 from .variants import CouplingVariant
 from .feedback import EmpiricalTemperatureFeedback, GradientDescentFeedback
+from .controllers import DiffEqController, SimpleSetpointController, PIDControl
 
 
 def setup_gpu_square_wave(cavity_force, amplitude: float, period_ps: float,
@@ -88,6 +89,51 @@ def setup_gpu_adaptive_square_wave(
     )
 
 
+def setup_gpu_decaying_square_wave(
+    cavity_force,
+    initial_amplitude: float,
+    period_ps: float,
+    duty_cycle: float = 0.5,
+    decay_rate_per_period: float = 0.0,
+    start_time_ps: float = 0.0,
+    stop_time_ps: float = -1.0,
+    minimum_amplitude: float = 1e-8,
+) -> None:
+    """Configure GPU-side decaying square-wave modulation."""
+    cavity_force.setDecayingSquareWaveModulation(
+        initial_amplitude, period_ps, duty_cycle, decay_rate_per_period,
+        start_time_ps, stop_time_ps, minimum_amplitude,
+    )
+
+
+def setup_gpu_sinusoid(
+    cavity_force,
+    amplitude: float,
+    period_ps: float,
+    phase_offset: float = 0.0,
+    start_time_ps: float = 0.0,
+    stop_time_ps: float = -1.0,
+) -> None:
+    """Configure GPU-side sinusoidal coupling modulation."""
+    cavity_force.setSinusoidModulation(
+        amplitude, period_ps, phase_offset, start_time_ps, stop_time_ps,
+    )
+
+
+def setup_gpu_exponential_wave(
+    cavity_force,
+    amplitude: float,
+    period_ps: float,
+    decay_tau_ps: float,
+    start_time_ps: float = 0.0,
+    stop_time_ps: float = -1.0,
+) -> None:
+    """Configure GPU-side exponential-wave coupling modulation."""
+    cavity_force.setExponentialWaveModulation(
+        amplitude, period_ps, decay_tau_ps, start_time_ps, stop_time_ps,
+    )
+
+
 def setup_multimode_adaptive_square_wave(
     force,
     period_ps: float,
@@ -120,7 +166,17 @@ def setup_multimode_adaptive_square_wave(
         force.setModeModulationParams(i, g, t, mn, mx)
 
 
-def assign_force_groups(system) -> Dict[str, int]:
+def configure_dipole_self_energy(force, include: bool = True) -> None:
+    """Enable or disable the dipole self-energy (self-polarization) term.
+
+    Works with ``CavityForce`` and ``MultiModeCavityForce``. When disabled,
+    the DSE energy and its force contribution via the displaced coordinate
+    are omitted; molecular forces reduce to pure bilinear coupling.
+    """
+    force.setIncludeDipoleSelfEnergy(include)
+
+
+def assign_force_groups(system, include_dipole_self_energy: bool = True) -> Dict[str, int]:
     """Assign force groups for energy decomposition.
 
     Must be called before Context creation.  Returns a map
@@ -138,6 +194,11 @@ def assign_force_groups(system) -> Dict[str, int]:
             force.setForceGroup(0)
             group_map["nonbonded"] = 0
         elif isinstance(force, openmm.CavityForce):
+            force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
+            force.setForceGroup(2)
+            group_map["cavity"] = 2
+        elif isinstance(force, openmm.MultiModeCavityForce):
+            force.setIncludeDipoleSelfEnergy(include_dipole_self_energy)
             force.setForceGroup(2)
             group_map["cavity"] = 2
         elif isinstance(force, openmm.BussiThermostat):
@@ -263,7 +324,15 @@ class CavityMDSimulation:
         new_bath_T = None
         if self._feedback is not None and self._thermostat is not None:
             current_T = self._thermostat.get_molecular_temperature()
-            if isinstance(self._feedback, GradientDescentFeedback):
+            if isinstance(
+                self._feedback,
+                (
+                    GradientDescentFeedback,
+                    DiffEqController,
+                    SimpleSetpointController,
+                    PIDControl,
+                ),
+            ):
                 new_bath_T = self._feedback.step(time_ps, current_T)
             elif isinstance(self._feedback, EmpiricalTemperatureFeedback):
                 new_bath_T = self._feedback.step(time_ps)

@@ -1415,6 +1415,7 @@ private:
     double omegac;
     double lambdaCoupling;
     double photonMass;
+    bool includeDSE;
     std::vector<std::pair<int, double>> couplingSchedule;
     std::vector<float> originalCharges;  // Charges in original order
     ComputeArray chargesArray;
@@ -1452,6 +1453,7 @@ private:
     double modStartTimePs;
     double modStopTimePs;
     double modDecayTauPs;
+    double modExtraParam1;
     // Adaptive square-wave state
     double modTargetTemperatureK;
     double modMinAmplitude;
@@ -1515,6 +1517,7 @@ private:
     double cavityLength;
     double moleculeZ;
     double dsePrefactor;
+    bool includeDSE;
     std::vector<int> originalCavityIndices;
     std::vector<float> originalCharges;
     std::vector<double> spatialProfiles;

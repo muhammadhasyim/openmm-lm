@@ -8,7 +8,7 @@
 #include "openmm/MultiModeCavityForce.h"
 #include "openmm/NonbondedForce.h"
 #include "openmm/OpenMMException.h"
-#include "openmm/ReferencePlatform.h"
+#include "ReferencePlatform.h"
 #include "openmm/System.h"
 #include "openmm/VerletIntegrator.h"
 #include <cmath>

@@ -135,6 +135,18 @@ public:
      */
     void setPhotonMass(double mass);
     /**
+     * Set whether the dipole self-energy (self-polarization) term is included.
+     * When false, the summed DSE energy and its force contribution via the
+     * displaced coordinate are omitted for all modes.
+     *
+     * @param include  true to include DSE (default), false to omit it
+     */
+    void setIncludeDipoleSelfEnergy(bool include);
+    /**
+     * Get whether the dipole self-energy term is included.
+     */
+    bool getIncludeDipoleSelfEnergy() const;
+    /**
      * Get the cavity length (in nm).
      */
     double getCavityLength() const {
@@ -313,6 +325,7 @@ private:
     double photonMass;
     double cavityLength;
     double moleculeZ;
+    bool includeDipoleSelfEnergy;
     std::vector<int> cavityParticleIndices;
     std::vector<double> spatialProfiles;
     double dsePrefactor;

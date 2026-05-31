@@ -15,6 +15,8 @@ except ImportError:
 if not hasattr(RPMDIntegrator, "setParticleType"):
     pytest.skip("Extended RPMD API (hybrid particle types) not available", allow_module_level=True)
 
+from rpmd_test_utils import is_finite_energy, rpmd_total_energy_kjmol
+
 
 def _pick_platform(prefer_cuda: bool = False):
     if prefer_cuda:
@@ -92,8 +94,7 @@ def test_cavity_rpmd_single_mode_classical_cavity():
     spread = np.array(spread)
     assert np.max(np.std(spread, axis=0)) < 1e-5
 
-    e0 = integrator.getTotalEnergy()
-    assert math.isfinite(e0)
+    assert is_finite_energy(integrator)
     del context, integrator
 
 
@@ -161,8 +162,8 @@ def test_cavity_rpmd_reference_cuda_agreement():
 
     int_ref.step(10)
     int_cuda.step(10)
-    e_ref = int_ref.getTotalEnergy()
-    e_cuda = int_cuda.getTotalEnergy()
+    e_ref = rpmd_total_energy_kjmol(int_ref)
+    e_cuda = rpmd_total_energy_kjmol(int_cuda)
     assert abs(e_ref - e_cuda) < 5.0
 
 
@@ -227,4 +228,4 @@ def test_multimode_cavity_rpmd():
             bead_pos.append(p[idx])
         bead_pos = np.array(bead_pos)
         assert np.max(np.std(bead_pos, axis=0)) < 1e-4
-    assert math.isfinite(integrator.getTotalEnergy())
+    assert is_finite_energy(integrator)

@@ -9,6 +9,8 @@ import pytest
 from openmm import Context, HarmonicBondForce, Platform, RPMDIntegrator, System
 from openmm import unit
 
+from rpmd_test_utils import is_finite_energy
+
 if not hasattr(RPMDIntegrator, "Trpmd"):
     pytest.skip("Extended RPMD API (TRPMD/FFL) not available", allow_module_level=True)
 
@@ -51,7 +53,7 @@ def test_trpmd_enum_and_runs():
             ],
         )
     integrator.step(200)
-    assert math.isfinite(integrator.getTotalEnergy())
+    assert is_finite_energy(integrator)
 
 
 def test_fast_forward_langevin_runs():
@@ -82,4 +84,4 @@ def test_fast_forward_langevin_runs():
             ],
         )
     integrator.step(100)
-    assert math.isfinite(integrator.getTotalEnergy())
+    assert is_finite_energy(integrator)

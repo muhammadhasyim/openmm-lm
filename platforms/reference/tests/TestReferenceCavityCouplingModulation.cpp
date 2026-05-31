@@ -2,7 +2,7 @@
  * Tests for GPU-side coupling modulation — Reference platform.               *
  * -------------------------------------------------------------------------- */
 
-#include "openmm/ReferencePlatform.h"
+#include "ReferencePlatform.h"
 
 using namespace OpenMM;
 

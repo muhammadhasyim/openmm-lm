@@ -4535,6 +4535,7 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     omegac = force.getOmegac();
     lambdaCoupling = force.getLambdaCoupling();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     couplingSchedule = force.getLambdaCouplingSchedule();
     
     int numParticles = system.getNumParticles();
@@ -4586,6 +4587,7 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     modStartTimePs = force.getModulationStartTimePs();
     modStopTimePs = force.getModulationStopTimePs();
     modDecayTauPs = force.getModulationDecayTauPs();
+    modExtraParam1 = force.getModulationExtraParam1();
     modTargetTemperatureK = force.getModulationTargetTemperatureK();
     modMinAmplitude = force.getModulationMinAmplitude();
     modMaxAmplitude = force.getModulationMaxAmplitude();
@@ -4676,7 +4678,10 @@ void CommonCalcCavityForceKernel::initialize(const System& system, const CavityF
     computeForceKernel->addArg(); // modStartTimePs
     computeForceKernel->addArg(); // modStopTimePs
     computeForceKernel->addArg(); // modDecayTauPs
-    computeForceKernel->addArg(adaptiveStateBuffer); // adaptiveState (arg 36)
+    computeForceKernel->addArg(); // modExtraParam1
+    computeForceKernel->addArg(); // modMinAmplitude
+    computeForceKernel->addArg(adaptiveStateBuffer); // adaptiveState (arg 38)
+    computeForceKernel->addArg(); // includeDSE (arg 39)
 
     // Initialize cached state for per-step optimizations
     cachedReorderedCavityIndex = cavityParticleIndex;
@@ -4777,6 +4782,9 @@ double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeFo
         computeForceKernel->setArg(33, (float)modStartTimePs);
         computeForceKernel->setArg(34, (float)modStopTimePs);
         computeForceKernel->setArg(35, (float)modDecayTauPs);
+        computeForceKernel->setArg(36, (float)modExtraParam1);
+        computeForceKernel->setArg(37, (float)modMinAmplitude);
+        computeForceKernel->setArg(39, (int)(includeDSE ? 1 : 0));
         staticArgsSet = true;
     }
 
@@ -4823,6 +4831,7 @@ void CommonCalcCavityForceKernel::copyParametersToContext(ContextImpl& context, 
     omegac = force.getOmegac();
     lambdaCoupling = force.getLambdaCoupling();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     couplingSchedule = force.getLambdaCouplingSchedule();
     // Update laser parameters
     cavityDriveEnabled = force.getCavityDriveEnabled();
@@ -4847,6 +4856,7 @@ void CommonCalcCavityForceKernel::copyParametersToContext(ContextImpl& context, 
     modStartTimePs = force.getModulationStartTimePs();
     modStopTimePs = force.getModulationStopTimePs();
     modDecayTauPs = force.getModulationDecayTauPs();
+    modExtraParam1 = force.getModulationExtraParam1();
     modTargetTemperatureK = force.getModulationTargetTemperatureK();
     modMinAmplitude = force.getModulationMinAmplitude();
     modMaxAmplitude = force.getModulationMaxAmplitude();
@@ -4998,6 +5008,7 @@ void CommonCalcMultiModeCavityForceKernel::initialize(const System& system, cons
     photonMass = force.getPhotonMass();
     cavityLength = force.getCavityLength();
     moleculeZ = force.getMoleculeZ();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     
     // Copy spatial profiles and original cavity indices
     spatialProfiles.resize(numModes);
@@ -5103,6 +5114,7 @@ void CommonCalcMultiModeCavityForceKernel::initialize(const System& system, cons
     computeForcesKernel->addArg(); // omega1
     computeForcesKernel->addArg(); // conversionFactor
     computeForcesKernel->addArg(); // photonMassAu
+    computeForcesKernel->addArg(); // includeDSE
 
     // Per-mode adaptive modulation state
     modEnabled = force.isModulationEnabled();
@@ -5216,6 +5228,7 @@ double CommonCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bool 
     computeForcesKernel->setArg(20, (float)omega1);
     computeForcesKernel->setArg(21, (float)CONV_E);
     computeForcesKernel->setArg(22, (float)photonMass_au_e);
+    computeForcesKernel->setArg(23, (int)(includeDSE ? 1 : 0));
     computeForcesKernel->execute(cc.getNumAtoms());
     
     // Download energy components
@@ -5234,6 +5247,7 @@ void CommonCalcMultiModeCavityForceKernel::copyParametersToContext(ContextImpl& 
     omega1 = force.getOmega1();
     lambda1 = force.getLambda1();
     photonMass = force.getPhotonMass();
+    includeDSE = force.getIncludeDipoleSelfEnergy();
     numModes = force.getNumModes();
     for (int i = 0; i < numModes; i++) {
         spatialProfiles[i] = force.getSpatialProfiles()[i];

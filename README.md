@@ -46,13 +46,24 @@ This repository extends upstream OpenMM with **machine-learning potentials** (bu
 |--------|--------|
 | RPMD + UMA bug fixes and regression context | [FIXES_SUMMARY.md](FIXES_SUMMARY.md) |
 | Hybrid RPMD design | [plugins/rpmd/HYBRID_RPMD.md](plugins/rpmd/HYBRID_RPMD.md) |
-| Rebuild / install (CUDA, FairChem, Hugging Face) | [docs/BUILD_AND_REINSTALL.md](docs/BUILD_AND_REINSTALL.md) |
-| ML runtime pip deps (FairChem, PyTorch) | [requirements-ml.txt](requirements-ml.txt) |
+| Rebuild / install (Pixi, CUDA, FairChem) | [docs/BUILD_AND_REINSTALL.md](docs/BUILD_AND_REINSTALL.md) |
+| ML runtime deps (FairChem, PyTorch) | `pixi install -e ml` or [requirements-ml.txt](requirements-ml.txt) |
 | Ice Ih RPMD benchmarks and LAMMPS / i-PI parity | [tests/uma_ice_rpmd/README.md](tests/uma_ice_rpmd/README.md) |
 | RPMD-focused tests | [tests/rpmd/README.md](tests/rpmd/README.md) |
 | Experimental ML architecture notes | [docs/ml-experimental/README.md](docs/ml-experimental/README.md) |
 
 **Support for this fork:** use **this repository’s** issues and discussions for UMA/RPMD/`PythonForce` batching and build questions; use **upstream** OpenMM channels for general API questions (see [SUPPORT.md](SUPPORT.md)).
+
+### Building from source (Pixi)
+
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh   # if pixi not installed
+pixi install                                  # build + install openmm
+pixi run smoke                                # verify platforms
+pixi run -e test test-py                      # Python wrapper tests
+```
+
+See [docs/BUILD_AND_REINSTALL.md](docs/BUILD_AND_REINSTALL.md) for environments (`test`, `ml`, `docs`) and platform notes.
 
 ### Submodule layout (FairChem)
 

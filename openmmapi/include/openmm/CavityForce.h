@@ -90,7 +90,13 @@ public:
          *  g_next = g_target * sqrt(T_target / T_bath).
          *  T_bath is read from the BussiThermostat context parameter each step.
          *  A persistent GPU buffer stores the current amplitude across steps. */
-        ModulationAdaptiveSquareWave = 4
+        ModulationAdaptiveSquareWave = 4,
+        /** Square wave with amplitude decaying each period: A_n = A0 * (1-r)^n. */
+        ModulationDecayingSquareWave = 5,
+        /** Sinusoidal coupling: A * (1 + sin(2*pi*dt/period + phase)) / 2. */
+        ModulationSinusoid = 6,
+        /** Periodic exponential pulses: A * exp(-t_in_period / tau) each period. */
+        ModulationExponentialWave = 7
     };
     /**
      * Parameter name for the cavity frequency (in atomic units).
@@ -177,6 +183,23 @@ public:
      */
     void setPhotonMass(double mass) {
         photonMass = mass;
+    }
+    /**
+     * Set whether the dipole self-energy (self-polarization) term is included.
+     * When false, the DSE energy and its force contribution via the displaced
+     * coordinate Dq = q + (epsilon/K)*d are omitted; molecular forces reduce
+     * to pure bilinear coupling -epsilon*q_i*q_photon.
+     *
+     * @param include  true to include DSE (default), false to omit it
+     */
+    void setIncludeDipoleSelfEnergy(bool include) {
+        includeDipoleSelfEnergy = include;
+    }
+    /**
+     * Get whether the dipole self-energy term is included.
+     */
+    bool getIncludeDipoleSelfEnergy() const {
+        return includeDipoleSelfEnergy;
     }
     /**
      * Get the spring constant K = photonMass * omegac^2.
@@ -368,9 +391,30 @@ public:
                                          double periodPs, double dutyCycle = 0.5,
                                          double startTimePs = 0.0, double stopTimePs = -1.0,
                                          double minAmplitude = 1e-8, double maxAmplitude = 0.1);
+    /**
+     * Set GPU-side decaying square-wave modulation.
+     *
+     * Amplitude decays each completed period: A_n = A0 * (1 - decayRatePerPeriod)^n,
+     * gated by duty cycle within each period.
+     */
+    void setDecayingSquareWaveModulation(double initialAmplitude, double periodPs,
+                                       double dutyCycle = 0.5, double decayRatePerPeriod = 0.0,
+                                       double startTimePs = 0.0, double stopTimePs = -1.0,
+                                       double minimumAmplitude = 1e-8);
+    /**
+     * Set GPU-side sinusoidal modulation: A * (1 + sin(2*pi*dt/period + phase)) / 2.
+     */
+    void setSinusoidModulation(double amplitude, double periodPs, double phaseOffset = 0.0,
+                               double startTimePs = 0.0, double stopTimePs = -1.0);
+    /**
+     * Set GPU-side exponential-wave modulation: A * exp(-t_in_period / tau) each period.
+     */
+    void setExponentialWaveModulation(double amplitude, double periodPs, double decayTauPs,
+                                      double startTimePs = 0.0, double stopTimePs = -1.0);
     double getModulationTargetTemperatureK() const { return modTargetTemperatureK; }
     double getModulationMinAmplitude() const { return modMinAmplitude; }
     double getModulationMaxAmplitude() const { return modMaxAmplitude; }
+    double getModulationExtraParam1() const { return modExtraParam1; }
     /**
      * Update the parameters in a Context to match those stored in this Force object.
      * 
@@ -392,6 +436,7 @@ private:
     double omegac;
     double lambdaCoupling;
     double photonMass;
+    bool includeDipoleSelfEnergy;
     int couplingOnStep;
     double couplingOnValue;
     std::vector<std::pair<int, double>> couplingSchedule;
@@ -423,6 +468,8 @@ private:
     double modTargetTemperatureK;
     double modMinAmplitude;
     double modMaxAmplitude;
+    // Extra modulation parameter (decay rate per period or phase offset)
+    double modExtraParam1;
 };
 
 } // namespace OpenMM

@@ -1906,6 +1906,7 @@ public:
         directLaserPhase(0.0), directLaserEnvelopeType(0), directLaserEnvParam1(0.0), directLaserEnvParam2(0.0),
         modulationType(0), modAmplitude(0.0), modPeriodPs(0.0), modDutyCycle(0.5),
         modStartTimePs(0.0), modStopTimePs(-1.0), modDecayTauPs(1.0),
+        modExtraParam1(0.0),
         modTargetTemperatureK(300.0), modMinAmplitude(1e-8), modMaxAmplitude(0.1),
         adaptiveAmplitude(0.0), lastAdaptivePeriod(-1) {
     }
@@ -1946,6 +1947,7 @@ private:
     double omegac;
     double lambdaCoupling;
     double photonMass;
+    bool includeDSE;
     std::vector<std::pair<int, double>> couplingSchedule;
     std::vector<double> charges;
     double harmonicEnergy;
@@ -1981,6 +1983,7 @@ private:
     double modStartTimePs;
     double modStopTimePs;
     double modDecayTauPs;
+    double modExtraParam1;
     double modTargetTemperatureK;
     double modMinAmplitude;
     double modMaxAmplitude;
@@ -2038,6 +2041,7 @@ private:
     double cavityLength;
     double moleculeZ;
     double dsePrefactor;
+    bool includeDSE;
     std::vector<int> cavityParticleIndices;
     std::vector<double> spatialProfiles;
     std::vector<double> charges;

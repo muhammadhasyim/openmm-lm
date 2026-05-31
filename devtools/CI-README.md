@@ -2,6 +2,8 @@
 
 # Our Continuous Integration setup
 
+> **This fork’s primary build and CI path is Pixi.** See [`docs/BUILD_AND_REINSTALL.md`](../../docs/BUILD_AND_REINSTALL.md) and [`.github/workflows/pixi-ci.yml`](../../.github/workflows/pixi-ci.yml). The notes below describe the **legacy upstream-style** GitHub Actions workflow (`.github/workflows/CI.yml`), which now runs on a **nightly schedule** only.
+
 OpenMM can be described as a C++ library with wrappers available in different programming languages (Python, C, Fortran). The heavy lifting is performed by the backend platforms, which can be based on CPU, CUDA and/or OpenCL (and possibly more in the future). All of this is supported for different operating systems and architectures. As a result, the CI setup can get a bit involved, but this document will try to clarify how it works and what we support.
 
 ## Implementation overview

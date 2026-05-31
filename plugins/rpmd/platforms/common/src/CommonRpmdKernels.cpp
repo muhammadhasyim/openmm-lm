@@ -814,7 +814,7 @@ void CommonIntegrateRPMDStepKernel::computeForces(ContextImpl& context, const RP
                         context.computeVirtualSites();
                         context.updateContextState();
                         context.calcForcesAndEnergy(true, false, forceGroupFlag);
-                        addForcesFromContextKernel->setArg(2, bead);
+                        addForcesFromContextKernel->setArg(3, bead);
                         addForcesFromContextKernel->execute(cc.getNumAtoms());
                     }
                 }

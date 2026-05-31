@@ -345,3 +345,24 @@ add_custom_target(PythonInstall
     WORKING_DIRECTORY ${OPENMM_PYTHON_STAGING_DIR}
     COMMENT "Installing OpenMM Python binary module..."
 )
+
+# When ON, `cmake --install` also installs the SWIG Python module into the
+# active prefix (used by pixi-build-cmake, which only runs ninja install).
+OPTION(OPENMM_PYTHON_INSTALL_TO_SITEPACKAGES
+    "Install OpenMM Python module during cmake --install (pixi / conda packaging)"
+    OFF)
+mark_as_advanced(OPENMM_PYTHON_INSTALL_TO_SITEPACKAGES)
+
+IF(OPENMM_PYTHON_INSTALL_TO_SITEPACKAGES)
+    IF(NOT OPENMM_BUILD_PYTHON_WRAPPERS)
+        MESSAGE(FATAL_ERROR "OPENMM_PYTHON_INSTALL_TO_SITEPACKAGES requires OPENMM_BUILD_PYTHON_WRAPPERS=ON")
+    ENDIF()
+    SET(PYTHON_PACKAGE_DIR "${OPENMM_PYTHON_STAGING_DIR}")
+    SET(PYTHON_SETUP_COMMAND "install")
+    CONFIGURE_FILE(
+        pysetup_pixi_install.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/pysetup_cmake_install.cmake"
+        @ONLY
+    )
+    INSTALL(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/pysetup_cmake_install.cmake")
+ENDIF()

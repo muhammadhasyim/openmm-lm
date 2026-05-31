@@ -1,0 +1,87 @@
+name: Pixi CI
+
+on:
+  push:
+    branches:
+      - "master"
+      - "mlip"
+      - "cavity-md"
+  pull_request:
+    branches:
+      - "master"
+      - "mlip"
+      - "cavity-md"
+  workflow_dispatch:
+
+jobs:
+  pixi-linux:
+    runs-on: ubuntu-latest
+    name: Pixi linux-64 build + test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pixi
+        uses: prefix-dev/setup-pixi@v0.9.14
+        with:
+          pixi-version: v0.69.0
+          cache: true
+
+      - name: Verify SWIG includes
+        run: python3 devtools/check_swig_includes.py
+
+      - name: Install and build (test env)
+        run: pixi install -e test
+
+      - name: Smoke test
+        run: pixi run -e test smoke
+
+      - name: Platform info
+        run: pixi run -e default info
+
+      - name: Python tests
+        run: pixi run -e test test-py
+
+      - name: C++ tests
+        run: pixi run -e test test-cpp
+
+  pixi-macos:
+    runs-on: macos-latest
+    name: Pixi osx-arm64 build + smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pixi
+        uses: prefix-dev/setup-pixi@v0.9.14
+        with:
+          pixi-version: v0.69.0
+          cache: true
+
+      - name: Install and build
+        run: pixi install
+
+      - name: Smoke test
+        run: pixi run -e test smoke
+
+  # Manual only: requires a self-hosted Linux runner with NVIDIA GPU, driver, and
+  # system CUDA toolkit at /usr/local/cuda (or set OPENMM_NVRTC_ROOT in the job).
+  pixi-linux-gpu:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, linux, cuda]
+    name: Pixi linux-64 CUDA smoke (GPU runner)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pixi
+        uses: prefix-dev/setup-pixi@v0.9.14
+        with:
+          pixi-version: v0.69.0
+          cache: true
+
+      - name: Install and build (test env)
+        run: pixi install -e test
+
+      - name: Rebuild CUDA plugin with system NVRTC
+        run: pixi run -e test fix-cuda
+
+      - name: Smoke test (CUDA)
+        run: pixi run -e test smoke

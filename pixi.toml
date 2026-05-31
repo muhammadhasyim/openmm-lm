@@ -179,7 +179,7 @@ pandas = "*"
 [feature.test.tasks]
 smoke = "python -m openmm.testInstallation"
 fix-cuda = "bash scripts/rebuild_cuda_plugin.sh"
-test-py = "python -m pytest -v wrappers/python/tests/TestCavityMDControllers.py tests/rpmd/ --ignore=tests/rpmd/test_uma_hybrid_rpmd_cavity.py -x"
+test-py = "python -m pytest -v wrappers/python/tests/TestCavityMDControllers.py tests/rpmd/ openmm-ml/test/TestCavityMLIP.py --ignore=tests/rpmd/test_uma_hybrid_rpmd_cavity.py -x"
 test-cpp = "bash scripts/build_and_test_cpp.sh"
 figure5 = "bash examples/cavity/c2f_protocol/run_figure5.sh"
 calibrate-fictive = "python examples/cavity/c2f_protocol/run_fictive_calibration.py"
@@ -189,9 +189,13 @@ calibrate-fictive-quick = "python examples/cavity/c2f_protocol/run_fictive_calib
 python = ">=3.11,<3.14"
 pip = "*"
 
+[feature.ml.pypi-dependencies]
+openmmml = { path = "openmm-ml", editable = true }
+
 [feature.ml.tasks]
-install-ml = "pip install -r requirements-ml.txt"
-smoke-ml = "python -c \"import openmmml; print('openmmml OK')\""
+install-ml = "pip install -e openmm-ml"
+smoke-ml = "python -c \"import openmmml; from openmmml import CavitySpec; print('openmmml OK')\""
+test-ml-cavity = "python -m pytest -q openmm-ml/test/TestCavityMLIP.py"
 
 [feature.docs.dependencies]
 sphinx = "*"

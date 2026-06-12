@@ -79,6 +79,43 @@ def test_fkt_frozen_positions_same_value():
     )
 
 
+def test_fkt_writes_f0_off_output_grid():
+    """References created between output grid points must still get lag = 0."""
+    np.random.seed(7)
+    positions = np.random.uniform(0, 2.0, size=(10, 3)).astype(np.float64)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prefix = str(Path(tmpdir) / "fkt_midgrid_test")
+        tracker = FKTTracker(
+            kmag_nm_inv=113.4,
+            num_wavevectors=50,
+            reference_interval_ps=200.0,
+            max_references=2,
+            output_period_ps=1.0,
+            output_prefix=prefix,
+        )
+        for t in (0.0, 1.0, 200.001, 201.001):
+            tracker.update(t, positions)
+        tracker.finalize()
+
+        out_file = Path(prefix + "_fkt_ref_001.txt")
+        assert out_file.exists(), f"Expected output file {out_file}"
+        data_lines = [
+            line
+            for line in out_file.read_text().splitlines()
+            if not line.startswith("#") and line.strip()
+        ]
+        first_lag = float(data_lines[0].split()[0])
+        np.testing.assert_allclose(
+            first_lag,
+            0.0,
+            atol=1e-6,
+            err_msg="First row after a mid-grid reference must be lag = 0 ps.",
+        )
+
+
 if __name__ == "__main__":
     test_fkt_frozen_positions_same_value()
+    test_fkt_writes_f0_off_output_grid()
     print("PASS: test_fkt_frozen_positions_same_value")
+    print("PASS: test_fkt_writes_f0_off_output_grid")

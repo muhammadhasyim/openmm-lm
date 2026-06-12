@@ -1,0 +1,5 @@
+lambda=0.042
+stage1_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq100K_lam0.042_dse_on_final_state.npz
+stage1_finished=2026-06-02T10:40:25-04:00
+stage2_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq100K_lam0.042_dse_off_final_state.npz
+stage2_finished=2026-06-02T10:42:09-04:00

@@ -1,0 +1,46 @@
+{
+  "k_conversion": {
+    "FKT_KMAG_AU": 6.0,
+    "FKT_KMAG_NM_INV_config": 113.38361266646132,
+    "FKT_KMAG_NM_INV_exact": 113.38361266646132,
+    "relative_diff": 0.0,
+    "pass": true
+  },
+  "force_field_lengths": {
+    "sigma_AA_nm": 0.32969843808,
+    "sigma_BB_nm": 0.29013716556,
+    "sigma_AB_nm": 0.26369948264,
+    "r0_AA_nm": 0.1207399431544966,
+    "r0_BB_nm": 0.10976994835058329,
+    "box_AU": 40.0,
+    "box_nm_expected": 2.116708,
+    "box_nm_openmm": 2.116708,
+    "box_match": true,
+    "pass": true
+  },
+  "dimensionless_k_products": {
+    "k_sigma_AA": 37.382400000000004,
+    "k_r0_AA": 13.689930948,
+    "k_r0_BB": 12.446113306200001,
+    "k_L_box": 240.0,
+    "k_2pi_over_sigma_AA": 1.0084722180244585,
+    "k_2pi_over_L": 0.15707963267948966
+  },
+  "tracker_round_trip": {
+    "F0_openmm_nm_tracker": 396.59702084136285,
+    "F0_openmm_exact_k": 396.5970208413653,
+    "F0_hoomd_bohr_style": 396.5970208413541,
+    "F0_nm_vs_hoomd_rel_diff": 2.2072496878553572e-14,
+    "pass": true
+  },
+  "position_sanity": {
+    "n_atoms": 500,
+    "bond_length_nm_mean": 0.11863390740549246,
+    "bond_length_nm_std": 0.004486127708783962,
+    "bond_length_nm_min": 0.10809028779783261,
+    "bond_length_nm_max": 0.12373603191556183,
+    "r0_AA_nm": 0.1207399431544966,
+    "min_pair_distance_nm": 0.0
+  },
+  "overall_pass": true
+}

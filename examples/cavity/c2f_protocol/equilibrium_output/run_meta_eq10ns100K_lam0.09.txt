@@ -1,0 +1,8 @@
+lambda=0.09
+runtime_ps=10000
+sample_interval_ps=10.0
+finite_q=1
+stage1_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq10ns100K_lam0.09_dse_on_final_state.npz
+stage1_finished=2026-06-02T14:01:02-04:00
+stage2_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq10ns100K_lam0.09_dse_off_final_state.npz
+stage2_finished=2026-06-02T14:17:45-04:00

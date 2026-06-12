@@ -1,0 +1,4 @@
+stage1_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq100K_dse_on_final_state.npz
+stage1_finished=2026-06-02T08:15:24-04:00
+stage2_final_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq100K_dse_off_final_state.npz
+stage2_finished=2026-06-02T08:19:20-04:00

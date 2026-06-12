@@ -1,0 +1,24 @@
+{
+  "primary_root_cause": "analysis_calibration_mismatch",
+  "ruled_out": [
+    "OpenMM nm/Bohr k conversion error",
+    "OpenMM vs HOOMD tracker mismatch on same IC",
+    "Molecular COM as production fix",
+    "Replacing paper k=6 with S(k)-peak k for production"
+  ],
+  "confirmed": {
+    "paper_k_au": 6.0,
+    "production_sites": "atomic",
+    "units_audit_pass": true,
+    "tracker_parity_pass": true
+  },
+  "open_issue": "relaxation_times_vs_temperature.txt reports tau_s\u2248105 ps at 100 K but atomic k=6 aging FKT (OpenMM and HOOMD) gives tau_block\u224815 ps and phi(1)\u22480.05. Calibration generator not in repo.",
+  "production_action": {
+    "fkt_sites": "atomic",
+    "kmag_au": 6.0,
+    "tau_method": "tau_F_over_F0_block",
+    "note": "Paper k=6 and atomic sites are correct; do not replace k from S(k) peak. Block-|phi| with min_lag=10 ps matches HOOMD/OpenMM parity; calibration tau=105 ps likely from long-equilibrium protocol not reproduced in aging FKT files."
+  },
+  "kscan_diagnostic_only": "compute_sk_kscan.json compares tau at multiple |k| for hypothesis testing; production remains k=6 per paper.",
+  "k6_replay_tau_block_ps": 17.94440164364673
+}

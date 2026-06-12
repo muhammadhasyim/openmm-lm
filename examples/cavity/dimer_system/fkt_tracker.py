@@ -5,8 +5,10 @@ Mirrors cav-hoomd's FieldAutocorrelationTracker: ρ_k(t) = Σ_j exp(i k·r_j),
 F(k,t) = Re⟨ρ_k(t) ρ*_k(t_0)⟩ with k-averaging over a Fibonacci sphere,
 multiple reference times t_w, and per-reference output files.
 
-Positions in nm; wavevectors in nm⁻¹. Caller passes molecular positions only
-(exclude cavity particle). Use wrapped positions (cav-hoomd parity) so that
+Positions in nm; wavevectors in nm⁻¹. Caller passes molecular sites only
+(exclude cavity particle). For diatomic mKA, use ``molecular_com_positions_nm``
+(250 COM sites) rather than all 500 atomic sites to avoid intramolecular
+dephasing at high |k|. Use wrapped positions (cav-hoomd parity) so that
 at 0 K F(k,t) stays constant; unwrapped positions can drift from round-off
 and cause spurious decorrelation.
 """
@@ -14,9 +16,58 @@ and cause spurious decorrelation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import numpy as np
+
+FktSiteMode = Literal["atomic", "molecular_com"]
+
+
+def molecular_com_positions_nm(
+    positions_nm: np.ndarray,
+    num_molecules: int,
+) -> np.ndarray:
+    """
+    Collapse consecutive atom pairs into molecular center-of-mass positions.
+
+    ``build_mka_system`` adds each diatom as two consecutive particles with
+    equal mass, so COM is the arithmetic mean of each pair.
+
+    Parameters
+    ----------
+    positions_nm : np.ndarray
+        Shape (2 * num_molecules, 3), wrapped atomic positions in nm.
+    num_molecules : int
+        Number of diatomic molecules (e.g. 250 for mKA).
+
+    Returns
+    -------
+    np.ndarray
+        Shape (num_molecules, 3), molecular COM positions in nm.
+    """
+    positions = np.asarray(positions_nm, dtype=np.float64)
+    expected_atoms = 2 * num_molecules
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError("positions_nm must be (N, 3)")
+    if positions.shape[0] != expected_atoms:
+        raise ValueError(
+            f"Expected {expected_atoms} atomic sites for {num_molecules} molecules, "
+            f"got {positions.shape[0]}"
+        )
+    return positions.reshape(num_molecules, 2, 3).mean(axis=1)
+
+
+def fkt_positions_nm(
+    positions_nm: np.ndarray,
+    num_molecules: int,
+    site_mode: FktSiteMode = "molecular_com",
+) -> np.ndarray:
+    """Select atomic or molecular-COM sites for F(k,t)."""
+    if site_mode == "atomic":
+        return np.asarray(positions_nm, dtype=np.float64)
+    if site_mode == "molecular_com":
+        return molecular_com_positions_nm(positions_nm, num_molecules)
+    raise ValueError(f"Unknown FKT site mode: {site_mode}")
 
 
 def fibonacci_sphere(samples: int) -> np.ndarray:
@@ -219,6 +270,18 @@ class FKTTracker:
                 )
             f.write("# lag_time_ps\tF(k,t)\n")
 
+    def _write_f0_for_reference(
+        self,
+        ref: dict,
+        rhok_real: np.ndarray,
+        rhok_imag: np.ndarray,
+    ) -> None:
+        """Write F(k, t_w) at lag = 0 when a reference frame is created."""
+        fkt0 = compute_fkt(
+            ref["rhok_real"], ref["rhok_imag"], rhok_real, rhok_imag
+        )
+        self._write_row(ref["ref_file_idx"], 0.0, fkt0)
+
     def _output_for_ref(
         self,
         ref: dict,
@@ -229,6 +292,8 @@ class FKTTracker:
         """Compute F(k,t) for this reference and write if needed."""
         file_idx = ref["ref_file_idx"]
         lag_time_ps = current_time_ps - ref["time_ps"]
+        if lag_time_ps < 0.5 * self.output_period_ps:
+            return
         fkt_value = compute_fkt(
             ref["rhok_real"], ref["rhok_imag"], rhok_real, rhok_imag
         )
@@ -279,6 +344,7 @@ class FKTTracker:
             self.references.append(ref)
             self.last_reference_time_ps = current_time_ps
             self._create_ref_file(file_idx, current_time_ps)
+            self._write_f0_for_reference(ref, rhok_real, rhok_imag)
             if len(self.references) > self.max_references:
                 self.references.pop(0)
 

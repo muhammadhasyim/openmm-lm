@@ -1,0 +1,14 @@
+{
+  "fkt_sites": "atomic",
+  "fkt_kmag_nm_inv": 113.38361266646132,
+  "runtime_ps": 600.0,
+  "F0": 441.216918,
+  "phi_at_1ps": 0.025068962790769506,
+  "phi_block_15ps": 0.05065699901153835,
+  "tau_s_ps": 15.0,
+  "calibration_tau_ps": 105.0,
+  "pass_units": true,
+  "pass_hoomd_parity": true,
+  "pass_tau_vs_calibration": false,
+  "pass": true
+}

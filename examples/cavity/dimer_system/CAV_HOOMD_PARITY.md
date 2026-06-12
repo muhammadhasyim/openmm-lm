@@ -10,7 +10,7 @@ python run_simulation.py --dimers 250 --g 0.0 --temp 100.0 --dt 0.001 --equil 20
   --fkt-output-period-ps 1.0 --fkt-ref-interval-ps 100.0 --constant-density --no-dipole --pdb ./test.pdb
 ```
 
-Parameters: 250 dimers, g=0 (no cavity), 100 K, 1 fs, Bussi (τ 5 ps), constant density (40 Bohr box), 200 ps equil + 3000 ps prod (3200 ps total), F(k,t) with k=113.4 nm⁻¹, 50 wavevectors, ref interval 100 ps, max refs 10, output period 1 ps.
+Parameters: 250 dimers, g=0 (no cavity), 100 K, 1 fs, Bussi (τ 5 ps), constant density (40 Bohr box), 200 ps equil + 3000 ps prod (3200 ps total), F(k,t) with |k|=6.0 Bohr⁻¹ (113.4 nm⁻¹ in OpenMM), 50 wavevectors, ref interval 100 ps, max refs 10, output period 1 ps.
 
 ## Cav-hoomd workflow (two steps)
 
@@ -33,7 +33,7 @@ From `examples/cavity/dimer_system/`:
 ```bash
 python run_cav_hoomd_advanced.py --no-cavity --temperature 100 --runtime 3200 \
   --fixed-timestep --timestep 1.0 --molecular-bath bussi --molecular-tau 5.0 \
-  --enable-fkt --fkt-kmag 113.4 --fkt-wavevectors 50 --fkt-ref-interval 100.0 \
+    --enable-fkt --fkt-kmag 6.0 --fkt-wavevectors 50 --fkt-ref-interval 100.0 \
   --fkt-max-refs 10 --fkt-output-period-ps 1.0 --input-gsd molecular-0.gsd \
   --device GPU --seed 42 --console-output-period-ps 10
 ```
@@ -78,7 +78,7 @@ F(k,t), etc.) should converge to the same values within sampling error.
 | dt 0.001 ps = 1 fs                       | `--fixed-timestep --timestep 1.0`                    |
 | equil 200 + prod 3000 = 3200 ps          | `--runtime 3200`                                    |
 | Bussi τ 5 ps                             | `--molecular-tau 5.0`                               |
-| F(k,t): k=113.4, 50 wavevectors          | `--fkt-kmag 113.4 --fkt-wavevectors 50`             |
+| F(k,t): |k|=113.4 nm⁻¹ (OpenMM)           | `--fkt-kmag 6.0 --fkt-wavevectors 50` (Bohr⁻¹)      |
 | F(k,t): ref interval 100 ps, max refs 10 | `--fkt-ref-interval 100.0 --fkt-max-refs 10`         |
 | F(k,t): output period 1 ps               | `--fkt-output-period-ps 1.0`                        |
 | seed 42                                  | `--seed 42`                                         |

@@ -1,0 +1,8 @@
+{
+  "F0_openmm_atomic": 881.0484806431236,
+  "F0_hoomd_style_same_frame": 881.0484806431238,
+  "relative_diff": 1.2903584787823482e-16,
+  "pass_parity": true,
+  "F0_hoomd_aging_file_lag0": 506.99279275,
+  "note": "Aging file F0 is from different MD state, not same IC frame"
+}

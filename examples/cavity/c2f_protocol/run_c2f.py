@@ -87,6 +87,8 @@ R0_BB_AU  = 2.0743522177  # Bohr   -->  omega ~ 2433 cm^-1
 
 # LJ:  V = 4*eps*[(sigma/r)^12 - (sigma/r)^6],  shifted at r_cut
 EPS_AA_AU   = 1.6685e-4;  SIG_AA_AU = 6.2304
+FKT_KMAG_PAPER_AU = 6.0  # paper Methods (diagnostic reference)
+FKT_KMAG_AU = 2.0 * np.pi / SIG_AA_AU  # production ISF: |k| = 2π/σ_AA
 EPS_BB_AU   = 8.3426e-5;  SIG_BB_AU = 5.4828
 EPS_AB_AU   = 2.5028e-4;  SIG_AB_AU = 4.9832
 RCUT_AU     = 15.0  # Bohr
@@ -319,6 +321,18 @@ def add_cavity_particle(system, positions):
     return cavity_index
 
 
+def _load_initial_state(path: Path) -> tuple[np.ndarray, np.ndarray | None]:
+    """Load positions (and optional velocities) from a final-state npz."""
+    data = np.load(path)
+    if "positions_nm" not in data:
+        raise KeyError(f"{path} missing positions_nm")
+    positions = np.asarray(data["positions_nm"], dtype=float)
+    velocities = None
+    if "velocities_nm_per_ps" in data:
+        velocities = np.asarray(data["velocities_nm_per_ps"], dtype=float)
+    return positions, velocities
+
+
 def initialize_cavity_position(context, cavity_index, temperature_K, omegac_au):
     """Sample cavity position from thermal distribution."""
     sigma_bohr = np.sqrt(KB_HARTREE_PER_K * temperature_K / (omegac_au ** 2))
@@ -521,6 +535,8 @@ def run_c2f(
     log_dt: bool = False,
     finite_q: bool = True,
     feedback_every_step: bool = False,
+    initial_state: Path | None = None,
+    resample_velocities: bool = True,
 ):
     """Run the full C2F protocol with SI-accurate adaptive integration.
 
@@ -554,13 +570,17 @@ def run_c2f(
     print(f"  pre-equil        = {equil_ps} ps (max {max_pre_equil_ps or equil_ps:.1f} ps)")
     print(f"  post-cavity equil= {post_cavity_equil_ps} ps (max {max_post_equil_ps} ps)")
     print(f"  adaptive dt      = {adaptive}")
+    if initial_state is not None:
+        print(f"  initial state    = {initial_state}")
+        print(f"  resample vel     = {resample_velocities}")
 
     np.random.seed(seed)
     omegac_au = cavity_freq_cm1 / HARTREE_TO_CM1
 
+    initial_velocities = None
     # ---- Build molecular system with Boltzmann bond sampling ----
     equil_positions = None
-    if equil_ps > 0:
+    if initial_state is None and equil_ps > 0:
         equil_positions = equilibrate_nvt(
             seed, initial_temperature_K, equil_ps,
             dt_ps=dt_ps, platform_name=platform_name,
@@ -570,13 +590,28 @@ def run_c2f(
             max_equil_ps=max_pre_equil_ps,
         )
 
+    bond_sample_T = None if initial_state is not None else initial_temperature_K
     system, positions, n_atoms = build_mka_system(
-        seed=seed, sample_bonds_at_T=initial_temperature_K
+        seed=seed, sample_bonds_at_T=bond_sample_T
     )
     if equil_positions is not None:
         positions = equil_positions
 
     cavity_index = add_cavity_particle(system, positions)
+
+    if initial_state is not None:
+        pos_nm, vel_nm = _load_initial_state(Path(initial_state))
+        if pos_nm.shape[0] != n_atoms + 1:
+            raise ValueError(
+                f"Expected {n_atoms + 1} particles in {initial_state}, "
+                f"got {pos_nm.shape[0]}"
+            )
+        positions = [
+            openmm.Vec3(*pos_nm[i]) * unit.nanometer
+            for i in range(pos_nm.shape[0])
+        ]
+        if vel_nm is not None:
+            initial_velocities = vel_nm
 
     # ---- Add CavityForce with GPU-side coupling modulation ----
     cavity_force = openmm.CavityForce(cavity_index, omegac_au, 0.0, PHOTON_MASS_AMU)
@@ -662,8 +697,16 @@ def run_c2f(
 
     context = openmm.Context(system, integrator, platform)
     context.setPositions(positions)
-    context.setVelocitiesToTemperature(initial_temperature_K * unit.kelvin)
-    initialize_cavity_position(context, cavity_index, initial_temperature_K, omegac_au)
+    if initial_state is not None and not resample_velocities and initial_velocities is not None:
+        vel_list = [
+            openmm.Vec3(*initial_velocities[i]) * (unit.nanometer / unit.picosecond)
+            for i in range(initial_velocities.shape[0])
+        ]
+        context.setVelocities(vel_list)
+    else:
+        context.setVelocitiesToTemperature(initial_temperature_K * unit.kelvin)
+    if initial_state is None:
+        initialize_cavity_position(context, cavity_index, initial_temperature_K, omegac_au)
 
     energy_tracker = EnergyTracker(
         context, cavity_force, group_map, n_atoms, cavity_index
@@ -990,6 +1033,22 @@ def run_c2f(
     )
     print(f"Final state saved to {output_prefix}_final_state.npz")
 
+    meta_path = Path(f"{output_prefix}_meta.txt")
+    with open(meta_path, "w") as meta_file:
+        meta_file.write(f"seed={seed}\n")
+        meta_file.write(f"initial_temperature_K={initial_temperature_K}\n")
+        meta_file.write(f"lambda_coupling={lambda_coupling}\n")
+        meta_file.write(f"omega_c_cm1={cavity_freq_cm1}\n")
+        meta_file.write(f"finite_q={finite_q}\n")
+        meta_file.write(f"coupling_start_ps={coupling_start_ps}\n")
+        meta_file.write(f"runtime_ps={runtime_ps}\n")
+        meta_file.write(f"feedback_every_step={feedback_every_step}\n")
+        meta_file.write(f"include_dipole_self_energy={include_dipole_self_energy}\n")
+        if initial_state is not None:
+            meta_file.write(f"initial_state={initial_state}\n")
+            meta_file.write(f"resample_velocities={resample_velocities}\n")
+    print(f"Run metadata saved to {meta_path}")
+
 
 # ===================================================================
 #  Main
@@ -1046,6 +1105,20 @@ def main():
                         help="Disable dipole self-energy (self-polarization) term in CavityForce")
     parser.add_argument("--output-prefix", default="c2f")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--initial-state", type=Path, default=None,
+        help="Load positions (and optionally velocities) from a final-state npz",
+    )
+    parser.add_argument(
+        "--no-resample-velocities", action="store_true",
+        help="Use velocities from --initial-state instead of resampling at initial-T",
+    )
+    parser.add_argument("--finite-q", dest="finite_q", action="store_true", default=True)
+    parser.add_argument("--no-finite-q", dest="finite_q", action="store_false")
+    parser.add_argument(
+        "--feedback-every-step", action="store_true",
+        help="Update bath from instantaneous T_s every sample (Fig 5 mode)",
+    )
     parser.add_argument("--platform", default=None,
                         help="OpenMM platform (CUDA, CPU, Reference). "
                              "Default: auto (CUDA > CPU > Reference). "
@@ -1108,9 +1181,13 @@ def main():
         seed=args.seed,
         include_dipole_self_energy=not args.no_dipole_self_energy,
         platform_name=args.platform,
-        equil_ps=args.equil_ps,
+        equil_ps=0.0 if args.initial_state is not None else args.equil_ps,
         adaptive=not args.no_adaptive,
         log_dt=args.log_dt,
+        finite_q=args.finite_q,
+        feedback_every_step=args.feedback_every_step,
+        initial_state=args.initial_state,
+        resample_velocities=not args.no_resample_velocities,
     )
 
 

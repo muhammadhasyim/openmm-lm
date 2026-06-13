@@ -19,6 +19,7 @@ from fkt_tracker import (  # noqa: E402
     compute_rhok,
     fibonacci_sphere,
     fkt_positions_nm,
+    subtract_com_positions_nm,
 )
 from run_c2f import (  # noqa: E402
     BOX_AU,
@@ -102,28 +103,47 @@ def bond_lengths_nm(positions_nm: np.ndarray, num_molecules: int = NUM_MOL) -> n
     return np.linalg.norm(pairs[:, 0, :] - pairs[:, 1, :], axis=1)
 
 
+def _fkt_positions_com_removed(
+    frame_nm: np.ndarray,
+    num_molecules: int,
+    site_mode: str,
+) -> np.ndarray:
+    """Select FKT sites and subtract the instantaneous molecular COM."""
+    return subtract_com_positions_nm(
+        fkt_positions_nm(frame_nm, num_molecules, site_mode=site_mode)
+    )
+
+
 def replay_fkt_from_trajectory_nm(
     trajectory_nm: np.ndarray,
     kmag_nm_inv: float,
     lag_ps: float = 1.0,
     num_molecules: int = NUM_MOL,
     site_mode: str = "atomic",
+    reference_frame: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Recompute F(k,t) from a position time series (T, N_atoms, 3) in nm.
 
-    Returns lag_times_ps, fkt_values for reference at frame 0.
+    Returns lag_times_ps, fkt_values for the chosen reference frame.
+    Molecular COM is subtracted per frame before rho_k evaluation.
     """
     n_frames = trajectory_nm.shape[0]
+    if reference_frame < 0 or reference_frame >= n_frames:
+        raise ValueError(f"reference_frame={reference_frame} out of range for {n_frames} frames")
     wv = wavevectors_nm(kmag_nm_inv)
-    pos0 = fkt_positions_nm(trajectory_nm[0], num_molecules, site_mode=site_mode)
-    r0_r, r0_i = compute_rhok(pos0, wv)
+    pos0 = _fkt_positions_com_removed(
+        trajectory_nm[reference_frame], num_molecules, site_mode=site_mode
+    )
+    r0_r, r0_i = compute_rhok(pos0, wv, subtract_com=False)
     lags: list[float] = []
     values: list[float] = []
-    for frame in range(n_frames):
-        pos = fkt_positions_nm(trajectory_nm[frame], num_molecules, site_mode=site_mode)
-        rr, ri = compute_rhok(pos, wv)
-        lags.append(frame * lag_ps)
+    for frame in range(reference_frame, n_frames):
+        pos = _fkt_positions_com_removed(
+            trajectory_nm[frame], num_molecules, site_mode=site_mode
+        )
+        rr, ri = compute_rhok(pos, wv, subtract_com=False)
+        lags.append((frame - reference_frame) * lag_ps)
         values.append(compute_fkt(r0_r, r0_i, rr, ri))
     return np.asarray(lags, dtype=float), np.asarray(values, dtype=float)
 

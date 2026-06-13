@@ -37,6 +37,7 @@ from run_c2f import (
     build_mka_system,
     add_cavity_particle,
     initialize_cavity_position,
+    remove_molecular_com_velocity,
     _select_platform,
 )
 
@@ -175,6 +176,8 @@ def run_cavity_equilibrium(
                 context, cavity_index, temperature_K, omegac_au
             )
 
+    remove_molecular_com_velocity(context, system, n_atoms)
+
     if displacer is not None and coupling_start_ps <= 0:
         displacer.displaceToEquilibrium(context, lambda_coupling)
         print(f"  Photon displaced to finite-q equilibrium (lambda={lambda_coupling})")
@@ -229,11 +232,15 @@ def run_cavity_equilibrium(
         )
         next_fkt_ps = fkt_t0_ps
 
+    def _guard_molecular_com_velocity() -> None:
+        remove_molecular_com_velocity(context, system, n_atoms)
+
     def _maybe_update_fkt(time_ps: float) -> None:
         nonlocal next_fkt_ps
         if fkt_tracker is None or time_ps + 1e-9 < fkt_t0_ps:
             return
         while time_ps + 1e-9 >= next_fkt_ps:
+            _guard_molecular_com_velocity()
             state_fkt = context.getState(getPositions=True, enforcePeriodicBox=True)
             pos_all = state_fkt.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
             pos_atomic = np.asarray(pos_all[:n_atoms], dtype=np.float64)
@@ -279,6 +286,7 @@ def run_cavity_equilibrium(
             csv_file.flush()
 
             if next_snapshot_ps is not None and time_ps + 1e-9 >= next_snapshot_ps:
+                _guard_molecular_com_velocity()
                 pos_snap = context.getState(getPositions=True).getPositions(asNumpy=True)
                 snapshot_times.append(time_ps)
                 snapshot_positions.append(

@@ -1,0 +1,14 @@
+seed=43
+temperature_K=100.0
+lambda_coupling=0.016667
+coupling_start_ps=200.0
+runtime_ps=2500.0
+finite_q=False
+include_dipole_self_energy=True
+enable_fkt=True
+fkt_kmag_nm_inv=19.05737055889539
+fkt_start_ps=200.0
+fkt_sites=atomic
+fkt_n_sites=500
+initial_state=/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/equilibrium_output/eq10ns100K_lam0_final_state.npz
+resample_velocities=True

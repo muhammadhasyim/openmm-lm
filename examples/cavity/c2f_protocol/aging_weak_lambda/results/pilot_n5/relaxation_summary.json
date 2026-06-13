@@ -1,0 +1,457 @@
+{
+  "0.0": {
+    "lambda": 0.0,
+    "job_dir": "/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/aging_weak_lambda/lambda0",
+    "by_tw": {
+      "0.0": {
+        "ref_idx": 0,
+        "ref_time_ps": 0.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 30143.589258869302,
+        "n_replicas": 5
+      },
+      "200.001": {
+        "ref_idx": 1,
+        "ref_time_ps": 200.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "401.001": {
+        "ref_idx": 2,
+        "ref_time_ps": 401.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "602.001": {
+        "ref_idx": 3,
+        "ref_time_ps": 602.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 526693.2645473522,
+        "n_replicas": 5
+      },
+      "803.001": {
+        "ref_idx": 4,
+        "ref_time_ps": 803.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 125398.39043293502,
+        "n_replicas": 5
+      },
+      "1004.001": {
+        "ref_idx": 5,
+        "ref_time_ps": 1004.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1205.001": {
+        "ref_idx": 6,
+        "ref_time_ps": 1205.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1406.001": {
+        "ref_idx": 7,
+        "ref_time_ps": 1406.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1607.001": {
+        "ref_idx": 8,
+        "ref_time_ps": 1607.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1808.001": {
+        "ref_idx": 9,
+        "ref_time_ps": 1808.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "2008.001": {
+        "ref_idx": 10,
+        "ref_time_ps": 2008.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 370.2655717173585,
+        "n_replicas": 5
+      },
+      "2209.0": {
+        "ref_idx": 11,
+        "ref_time_ps": 2209.0,
+        "tau_s_ps": 17.3843604133833,
+        "tau_kww_ps": 38.8449977173137,
+        "n_replicas": 5
+      }
+    },
+    "n_replicas": 5
+  },
+  "0.01": {
+    "lambda": 0.01,
+    "job_dir": "/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/aging_weak_lambda/lambda0p01",
+    "by_tw": {
+      "0.0": {
+        "ref_idx": 0,
+        "ref_time_ps": 0.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "200.001": {
+        "ref_idx": 1,
+        "ref_time_ps": 200.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 2759436.0971911172,
+        "n_replicas": 5
+      },
+      "401.001": {
+        "ref_idx": 2,
+        "ref_time_ps": 401.001,
+        "tau_s_ps": 17.898649701448228,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "602.001": {
+        "ref_idx": 3,
+        "ref_time_ps": 602.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "803.001": {
+        "ref_idx": 4,
+        "ref_time_ps": 803.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1004.001": {
+        "ref_idx": 5,
+        "ref_time_ps": 1004.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 7153.684526077041,
+        "n_replicas": 5
+      },
+      "1205.001": {
+        "ref_idx": 6,
+        "ref_time_ps": 1205.001,
+        "tau_s_ps": 19.519219424293553,
+        "tau_kww_ps": 7872.8892039538905,
+        "n_replicas": 5
+      },
+      "1406.001": {
+        "ref_idx": 7,
+        "ref_time_ps": 1406.001,
+        "tau_s_ps": 16.79865048321208,
+        "tau_kww_ps": 10225.144305889224,
+        "n_replicas": 5
+      },
+      "1607.001": {
+        "ref_idx": 8,
+        "ref_time_ps": 1607.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 9622.67148463257,
+        "n_replicas": 5
+      },
+      "1808.001": {
+        "ref_idx": 9,
+        "ref_time_ps": 1808.001,
+        "tau_s_ps": 27.621506818164946,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "2008.001": {
+        "ref_idx": 10,
+        "ref_time_ps": 2008.001,
+        "tau_s_ps": 18.69713201385251,
+        "tau_kww_ps": 267.7647016697137,
+        "n_replicas": 5
+      },
+      "2209.0": {
+        "ref_idx": 11,
+        "ref_time_ps": 2209.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      }
+    },
+    "n_replicas": 5
+  },
+  "0.016667": {
+    "lambda": 0.016667,
+    "job_dir": "/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/aging_weak_lambda/lambda0p016667",
+    "by_tw": {
+      "0.0": {
+        "ref_idx": 0,
+        "ref_time_ps": 0.0,
+        "tau_s_ps": 20.016216583497947,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "200.001": {
+        "ref_idx": 1,
+        "ref_time_ps": 200.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "401.001": {
+        "ref_idx": 2,
+        "ref_time_ps": 401.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 99879.69607493488,
+        "n_replicas": 5
+      },
+      "602.001": {
+        "ref_idx": 3,
+        "ref_time_ps": 602.001,
+        "tau_s_ps": 25.998597493970912,
+        "tau_kww_ps": 9727.693442072088,
+        "n_replicas": 5
+      },
+      "803.001": {
+        "ref_idx": 4,
+        "ref_time_ps": 803.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1004.001": {
+        "ref_idx": 5,
+        "ref_time_ps": 1004.001,
+        "tau_s_ps": 16.846336153251364,
+        "tau_kww_ps": 47471.37986770485,
+        "n_replicas": 5
+      },
+      "1205.001": {
+        "ref_idx": 6,
+        "ref_time_ps": 1205.001,
+        "tau_s_ps": 15.314776294517902,
+        "tau_kww_ps": 246648.7320379721,
+        "n_replicas": 5
+      },
+      "1406.001": {
+        "ref_idx": 7,
+        "ref_time_ps": 1406.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1607.001": {
+        "ref_idx": 8,
+        "ref_time_ps": 1607.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 1759.159615656325,
+        "n_replicas": 5
+      },
+      "1808.001": {
+        "ref_idx": 9,
+        "ref_time_ps": 1808.001,
+        "tau_s_ps": 22.49425861708324,
+        "tau_kww_ps": 546.2794862412611,
+        "n_replicas": 5
+      },
+      "2008.001": {
+        "ref_idx": 10,
+        "ref_time_ps": 2008.001,
+        "tau_s_ps": 18.242885119847656,
+        "tau_kww_ps": 143.6986844387674,
+        "n_replicas": 5
+      },
+      "2209.0": {
+        "ref_idx": 11,
+        "ref_time_ps": 2209.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 127.20788667183211,
+        "n_replicas": 5
+      }
+    },
+    "n_replicas": 5
+  },
+  "0.023333": {
+    "lambda": 0.023333,
+    "job_dir": "/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/aging_weak_lambda/lambda0p023333",
+    "by_tw": {
+      "0.0": {
+        "ref_idx": 0,
+        "ref_time_ps": 0.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "200.001": {
+        "ref_idx": 1,
+        "ref_time_ps": 200.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 27101.366842112107,
+        "n_replicas": 5
+      },
+      "401.001": {
+        "ref_idx": 2,
+        "ref_time_ps": 401.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 1312460.6946924387,
+        "n_replicas": 5
+      },
+      "602.001": {
+        "ref_idx": 3,
+        "ref_time_ps": 602.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "803.001": {
+        "ref_idx": 4,
+        "ref_time_ps": 803.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 28833.271257420398,
+        "n_replicas": 5
+      },
+      "1004.001": {
+        "ref_idx": 5,
+        "ref_time_ps": 1004.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 7278.635570386152,
+        "n_replicas": 5
+      },
+      "1205.001": {
+        "ref_idx": 6,
+        "ref_time_ps": 1205.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1406.001": {
+        "ref_idx": 7,
+        "ref_time_ps": 1406.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 13892.273885111,
+        "n_replicas": 5
+      },
+      "1607.001": {
+        "ref_idx": 8,
+        "ref_time_ps": 1607.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 72817.13437682134,
+        "n_replicas": 5
+      },
+      "1808.001": {
+        "ref_idx": 9,
+        "ref_time_ps": 1808.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 1862.3782813652083,
+        "n_replicas": 5
+      },
+      "2008.001": {
+        "ref_idx": 10,
+        "ref_time_ps": 2008.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 498.44860780525386,
+        "n_replicas": 5
+      },
+      "2209.0": {
+        "ref_idx": 11,
+        "ref_time_ps": 2209.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 42.45863450290177,
+        "n_replicas": 5
+      }
+    },
+    "n_replicas": 5
+  },
+  "0.03": {
+    "lambda": 0.03,
+    "job_dir": "/media/extradrive/Trajectories/openmm/examples/cavity/c2f_protocol/aging_weak_lambda/lambda0p03",
+    "by_tw": {
+      "0.0": {
+        "ref_idx": 0,
+        "ref_time_ps": 0.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "200.001": {
+        "ref_idx": 1,
+        "ref_time_ps": 200.001,
+        "tau_s_ps": 17.041354023698656,
+        "tau_kww_ps": 29138.23978534014,
+        "n_replicas": 5
+      },
+      "401.001": {
+        "ref_idx": 2,
+        "ref_time_ps": 401.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 4331.516992009678,
+        "n_replicas": 5
+      },
+      "602.001": {
+        "ref_idx": 3,
+        "ref_time_ps": 602.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 34777.256886127034,
+        "n_replicas": 5
+      },
+      "803.001": {
+        "ref_idx": 4,
+        "ref_time_ps": 803.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1004.001": {
+        "ref_idx": 5,
+        "ref_time_ps": 1004.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "1205.001": {
+        "ref_idx": 6,
+        "ref_time_ps": 1205.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 69354.39504802776,
+        "n_replicas": 5
+      },
+      "1406.001": {
+        "ref_idx": 7,
+        "ref_time_ps": 1406.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 5285.061433573567,
+        "n_replicas": 5
+      },
+      "1607.001": {
+        "ref_idx": 8,
+        "ref_time_ps": 1607.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 16326.393846384786,
+        "n_replicas": 5
+      },
+      "1808.001": {
+        "ref_idx": 9,
+        "ref_time_ps": 1808.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": null,
+        "n_replicas": 5
+      },
+      "2008.001": {
+        "ref_idx": 10,
+        "ref_time_ps": 2008.001,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 1231.0993017203994,
+        "n_replicas": 5
+      },
+      "2209.0": {
+        "ref_idx": 11,
+        "ref_time_ps": 2209.0,
+        "tau_s_ps": 15.0,
+        "tau_kww_ps": 123.00255048634244,
+        "n_replicas": 5
+      }
+    },
+    "n_replicas": 5
+  }
+}

@@ -99,9 +99,24 @@ def fibonacci_sphere(samples: int) -> np.ndarray:
     return np.array(points, dtype=np.float64)
 
 
+def subtract_com_positions_nm(positions_nm: np.ndarray) -> np.ndarray:
+    """
+    Translate positions so the molecular center of mass is at the origin.
+
+    F(k,t) is invariant under uniform translation only when k is commensurate
+    with the box; subtracting COM removes spurious decorrelation from
+    ballistic center-of-mass drift under momentum-conserving integrators.
+    """
+    positions = np.asarray(positions_nm, dtype=np.float64)
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError("positions_nm must be (N, 3)")
+    return positions - positions.mean(axis=0, keepdims=True)
+
+
 def compute_rhok(
     positions_nm: np.ndarray,
     wavevectors_nm_inv: np.ndarray,
+    subtract_com: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute density modes ρ_k = Σ_j exp(i k·r_j) for all wavevectors.
@@ -112,14 +127,21 @@ def compute_rhok(
         Shape (N, 3), positions in nm (molecular particles only).
     wavevectors_nm_inv : np.ndarray
         Shape (M, 3), wavevectors in nm⁻¹.
+    subtract_com : bool
+        If True (default), subtract the instantaneous molecular COM first.
 
     Returns
     -------
     rhok_real, rhok_imag : np.ndarray
         Each shape (M,), real and imaginary parts of ρ_k.
     """
+    positions = (
+        subtract_com_positions_nm(positions_nm)
+        if subtract_com
+        else np.asarray(positions_nm, dtype=np.float64)
+    )
     # k_dot_r: (M, N)
-    k_dot_r = np.dot(wavevectors_nm_inv, positions_nm.T)
+    k_dot_r = np.dot(wavevectors_nm_inv, positions.T)
     rhok_complex = np.sum(np.exp(1j * k_dot_r), axis=1)
     return np.real(rhok_complex), np.imag(rhok_complex)
 

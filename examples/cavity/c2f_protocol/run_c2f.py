@@ -345,6 +345,49 @@ def initialize_cavity_position(context, cavity_index, temperature_K, omegac_au):
     context.setPositions(pos_list)
 
 
+def remove_molecular_com_velocity(
+    context: openmm.Context,
+    system: openmm.System,
+    n_atoms: int,
+) -> None:
+    """
+    Remove the mass-weighted center-of-mass velocity of molecular atoms.
+
+    The cavity particle (index ``n_atoms``) is left unchanged. Required for
+    momentum-conserving Verlet integrators when velocities are resampled
+    without a COM-subtracting thermostat, otherwise F(k,t) decorrelates from
+    ballistic box translation.
+    """
+    if n_atoms < 1:
+        return
+    state = context.getState(getVelocities=True)
+    velocities_nm_ps = state.getVelocities(asNumpy=True).value_in_unit(
+        unit.nanometer / unit.picosecond
+    )
+    masses_amu = np.array(
+        [
+            system.getParticleMass(particle_idx).value_in_unit(unit.amu)
+            for particle_idx in range(n_atoms)
+        ],
+        dtype=np.float64,
+    )
+    vel_molecular = np.asarray(velocities_nm_ps[:n_atoms], dtype=np.float64)
+    total_mass = float(np.sum(masses_amu))
+    if total_mass <= 0.0:
+        return
+    com_velocity = np.sum(vel_molecular * masses_amu[:, None], axis=0) / total_mass
+    vel_molecular -= com_velocity
+    new_velocities = np.asarray(velocities_nm_ps, dtype=np.float64).copy()
+    new_velocities[:n_atoms] = vel_molecular
+    context.setVelocities(
+        [
+            openmm.Vec3(*new_velocities[particle_idx])
+            * (unit.nanometer / unit.picosecond)
+            for particle_idx in range(new_velocities.shape[0])
+        ]
+    )
+
+
 def equilibrate_nvt(seed, temperature_K, equil_ps, dt_ps=0.001,
                     platform_name=None, minimize_steps=100,
                     sample_bonds_at_T=None, calibration_file=None,
@@ -708,6 +751,8 @@ def run_c2f(
     if initial_state is None:
         initialize_cavity_position(context, cavity_index, initial_temperature_K, omegac_au)
 
+    remove_molecular_com_velocity(context, system, n_atoms)
+
     energy_tracker = EnergyTracker(
         context, cavity_force, group_map, n_atoms, cavity_index
     )
@@ -889,6 +934,8 @@ def run_c2f(
                 thermostat.apply_cavity_thermostat_step(
                     sample_interval_ps if steps == 1 else dt_ps * steps
                 )
+
+            remove_molecular_com_velocity(context, system, n_atoms)
 
             time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
             energies = energy_tracker.get_energies()

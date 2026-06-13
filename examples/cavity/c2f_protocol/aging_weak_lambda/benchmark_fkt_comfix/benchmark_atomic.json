@@ -1,0 +1,20 @@
+{
+  "fkt_sites": "atomic",
+  "fkt_kmag_au": 1.0084722180244585,
+  "fkt_kmag_nm_inv": 19.05737055889539,
+  "runtime_ps": 600.0,
+  "resample_velocities": true,
+  "F0": 774.8225898,
+  "phi_at_1ps": 0.7128363458563686,
+  "phi_block_15ps": 0.4542153482433963,
+  "tau_s_ps": 154.34148921891543,
+  "calibration_tau_ps": 105.0,
+  "com_drift_nm": 0.0012378300781006248,
+  "raw_msd_100ps_nm2": 0.04596166372675362,
+  "pass_units": true,
+  "pass_f0_coherent": true,
+  "pass_com_drift": true,
+  "pass_glassy_msd": true,
+  "pass_tau_vs_calibration": true,
+  "pass": true
+}

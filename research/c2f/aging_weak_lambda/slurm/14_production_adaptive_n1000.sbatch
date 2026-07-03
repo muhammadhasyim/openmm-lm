@@ -95,7 +95,9 @@ if [[ ! -f "${IC_FILE}" ]]; then
 fi
 
 echo "=== array ${SLURM_ARRAY_TASK_ID}: replicas ${REPLICA_START}-${REPLICA_END} (STACK=${STACK}) ==="
-echo "=== max-metric adaptive, jobs=5, all lambda including 0.0 ==="
+echo "=== max-metric adaptive, dt_max=0.5 fs, jobs=5, all lambda including 0.0 ==="
+
+DT_MAX_PS="${DT_MAX_PS:-0.0005}"
 
 WALL_START=$(date +%s)
 JOBS="${JOBS:-5}"
@@ -108,6 +110,7 @@ fi
   --replica-start "${REPLICA_START}" \
   --replica-end "${REPLICA_END}" \
   --runtime-ps 1500 \
+  --dt-max-ps "${DT_MAX_PS}" \
   --adaptive \
   --no-resume \
   --no-skip \

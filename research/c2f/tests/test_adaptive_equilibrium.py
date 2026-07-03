@@ -82,6 +82,125 @@ def test_create_adaptive_state_before_turn_on() -> None:
     assert state["prev_lambda_on"] is False
     assert state["last_lambda"] == pytest.approx(0.0)
     assert state["eps_relaxed"] == pytest.approx(1.0)
+    assert state["last_epsilon"] == pytest.approx(0.0)
+
+
+def test_create_adaptive_state_tracks_epsilon() -> None:
+    from openmm.cavitymd.adaptive import create_adaptive_state
+
+    state = create_adaptive_state(0.03, 200.0, omegac_au=0.01, eps_relaxed=1.0)
+    assert state["last_epsilon"] == pytest.approx(0.0)
+    assert state["omegac_au"] == pytest.approx(0.01)
+
+
+def test_coupling_epsilon_au_matches_lambda() -> None:
+    from openmm.cavitymd.adaptive import coupling_epsilon_au
+
+    omegac = 0.01
+    assert coupling_epsilon_au(199.0, 200.0, 0.03, omegac) == pytest.approx(0.0)
+    assert coupling_epsilon_au(201.0, 200.0, 0.03, omegac) == pytest.approx(0.03 * omegac)
+
+
+def test_pre_switch_guard_widened() -> None:
+    from openmm.cavitymd.adaptive import (
+        F0,
+        PRE_SWITCH_GUARD_PS,
+        AdaptiveParityConfig,
+        create_adaptive_state,
+        effective_epsilon_scaled,
+    )
+
+    legacy = AdaptiveParityConfig(pre_switch_guard_ps=PRE_SWITCH_GUARD_PS)
+    state = create_adaptive_state(0.03, 200.0, eps_relaxed=2.0, parity_config=legacy)
+    assert effective_epsilon_scaled(190.0, state, 200.0, 0.03, 0.001) == pytest.approx(2.0)
+    assert effective_epsilon_scaled(196.0, state, 200.0, 0.03, 0.001) == pytest.approx(2.0 * F0)
+    assert effective_epsilon_scaled(
+        200.0 - PRE_SWITCH_GUARD_PS, state, 200.0, 0.03, 0.001
+    ) == pytest.approx(2.0 * F0)
+
+
+def test_pre_switch_guard_disabled_via_parity_config() -> None:
+    from openmm.cavitymd.adaptive import (
+        AdaptiveParityConfig,
+        create_adaptive_state,
+        effective_epsilon_scaled,
+    )
+
+    cfg = AdaptiveParityConfig(pre_switch_guard_ps=0.0)
+    state = create_adaptive_state(0.03, 200.0, eps_relaxed=2.0, parity_config=cfg)
+    assert effective_epsilon_scaled(196.0, state, 200.0, 0.03, 0.001) == pytest.approx(2.0)
+
+
+def test_cavhoomd_runtime_parity_config_defaults() -> None:
+    from openmm.cavitymd.adaptive import cavhoomd_runtime_parity_config
+
+    cfg = cavhoomd_runtime_parity_config(error_tolerance=1.0, initial_fraction=1e-5)
+    assert cfg.pre_switch_guard_ps == 0.0
+    assert cfg.dt_slew_threshold == pytest.approx(0.0)
+    assert cfg.f0 == pytest.approx(1e-5)
+    assert cfg.absolute_error_tolerance == pytest.approx(1.0)
+
+
+def test_default_parity_config_uses_force_calibration() -> None:
+    from openmm.cavitymd.adaptive import default_parity_config
+
+    cfg = default_parity_config()
+    assert cfg.absolute_error_tolerance is None
+    assert cfg.f0 == pytest.approx(1e-5)
+    assert cfg.pre_switch_guard_ps == pytest.approx(0.0)
+
+
+def test_would_cross_coupling_switch() -> None:
+    from openmm.cavitymd.adaptive import would_cross_coupling_switch
+
+    assert not would_cross_coupling_switch(199.0, 0.001, 200.0, 0.03)
+    assert would_cross_coupling_switch(199.999, 0.002, 200.0, 0.03)
+    assert not would_cross_coupling_switch(200.0, 0.001, 200.0, 0.03)
+    assert not would_cross_coupling_switch(199.0, 0.001, 200.0, 0.0)
+
+
+def test_effective_force_update_interval_recovery() -> None:
+    from openmm.cavitymd.adaptive import (
+        FORCE_UPDATE_INTERVAL,
+        TAU_RAMP_PS,
+        effective_force_update_interval,
+    )
+
+    state = {"ramp_t0": 200.0}
+    assert effective_force_update_interval(state, 200.0) == 1
+    assert effective_force_update_interval(state, 200.0 + 0.5 * TAU_RAMP_PS) == 1
+    assert effective_force_update_interval(state, 200.0 + TAU_RAMP_PS) == FORCE_UPDATE_INTERVAL
+    assert effective_force_update_interval({"ramp_t0": None}, 100.0) == FORCE_UPDATE_INTERVAL
+
+
+def test_effective_dt_max_scales_with_ramp() -> None:
+    from openmm.cavitymd.adaptive import (
+        DT_MAX_PS,
+        F0,
+        TAU_RAMP_PS,
+        AdaptiveParityConfig,
+        effective_dt_max_ps,
+    )
+
+    state = {"ramp_t0": 200.0, "parity_config": AdaptiveParityConfig(f0=F0)}
+    assert effective_dt_max_ps(200.0, state) == pytest.approx(DT_MAX_PS * F0)
+    mid = effective_dt_max_ps(210.0, state)
+    assert mid > DT_MAX_PS * F0
+    assert mid < DT_MAX_PS
+    assert effective_dt_max_ps(200.0 + 10.0 * TAU_RAMP_PS, state) == pytest.approx(
+        DT_MAX_PS, rel=1e-2
+    )
+
+
+def test_epsilon_shock_triggers_on_turn_on_jump() -> None:
+    """|Δε| at λ step must exceed COUPLING_CHANGE_THRESHOLD for λ=0.03."""
+    from openmm.cavitymd.adaptive import COUPLING_CHANGE_THRESHOLD, coupling_epsilon_au
+
+    omegac = 0.00913
+    eps_before = coupling_epsilon_au(199.9, 200.0, 0.03, omegac)
+    eps_after = coupling_epsilon_au(200.1, 200.0, 0.03, omegac)
+    assert eps_before == pytest.approx(0.0)
+    assert abs(eps_after - eps_before) >= COUPLING_CHANGE_THRESHOLD
 
 
 def test_compute_force_max_norm_known_values() -> None:
@@ -142,29 +261,43 @@ def test_calibrate_epsilon_gives_target_dt() -> None:
 
 def test_effective_epsilon_scaled_shock_and_ramp() -> None:
     from openmm.cavitymd.adaptive import (
-        F0,
+        AdaptiveParityConfig,
+        PRE_SWITCH_GUARD_PS,
         create_adaptive_state,
+        default_parity_config,
         effective_epsilon_scaled,
     )
 
     eps_relaxed = 2.0
-    state = create_adaptive_state(0.03, 200.0, eps_relaxed=eps_relaxed)
+    legacy = AdaptiveParityConfig(pre_switch_guard_ps=PRE_SWITCH_GUARD_PS)
+    state = create_adaptive_state(
+        0.03, 200.0, eps_relaxed=eps_relaxed, parity_config=legacy
+    )
     assert effective_epsilon_scaled(
         100.0, state, 200.0, 0.03, current_dt_ps=0.001
     ) == pytest.approx(eps_relaxed)
     eps_near = effective_epsilon_scaled(
         199.999, state, 200.0, 0.03, current_dt_ps=0.001
     )
-    assert eps_near == pytest.approx(eps_relaxed * F0)
+    assert eps_near == pytest.approx(eps_relaxed * legacy.f0)
+    eps_guard = effective_epsilon_scaled(
+        196.0, state, 200.0, 0.03, current_dt_ps=0.001
+    )
+    assert eps_guard == pytest.approx(eps_relaxed * legacy.f0)
 
-    state_shock = {"ramp_t0": 200.0, "eps_relaxed": eps_relaxed}
+    cfg = default_parity_config()
+    state_shock = {
+        "ramp_t0": 200.0,
+        "eps_relaxed": eps_relaxed,
+        "parity_config": cfg,
+    }
     assert effective_epsilon_scaled(
         200.0, state_shock, 200.0, 0.03, current_dt_ps=1e-6
-    ) == pytest.approx(eps_relaxed * F0)
+    ) == pytest.approx(eps_relaxed * cfg.f0)
     later = effective_epsilon_scaled(
         210.0, state_shock, 200.0, 0.03, current_dt_ps=0.001
     )
-    assert later > eps_relaxed * F0
+    assert later > eps_relaxed * cfg.f0
     assert later < eps_relaxed
 
 
@@ -314,6 +447,37 @@ def test_adaptive_lam003_turn_on_200ps_stable(tmp_path: Path) -> None:
     T_kin = np.atleast_1d(csv["T_kinetic_K"])
     assert np.all(np.isfinite(T_kin))
     assert np.max(T_kin) < 500.0
+
+
+@pytestmark_integration
+def test_adaptive_seed42_lam003_past_turnon_500ps(tmp_path: Path) -> None:
+    """Campaign seed 42 / lam=0.03 must survive 500 ps past coupling turn-on."""
+    prefix = tmp_path / "adapt_seed42_lam003_500"
+    ic = C2F_ROOT / "equilibrium_output" / "eq10ns100K_lam0_final_state.npz"
+    if not ic.is_file():
+        pytest.skip(f"Missing IC: {ic}")
+
+    rce.run_cavity_equilibrium(
+        temperature_K=100.0,
+        runtime_ps=500.0,
+        lambda_coupling=0.03,
+        include_dipole_self_energy=True,
+        output_prefix=str(prefix),
+        seed=42,
+        sample_interval_ps=1.0,
+        finite_q=False,
+        platform_name=_integration_platform(),
+        coupling_start_ps=200.0,
+        adaptive=True,
+        initial_state=ic,
+        resample_velocities=True,
+        num_molecules=250,
+        enable_fkt=False,
+    )
+    csv = np.genfromtxt(f"{prefix}_energies.csv", delimiter=",", names=True)
+    T_kin = np.atleast_1d(csv["T_kinetic_K"])
+    assert np.all(np.isfinite(T_kin))
+    assert np.max(T_kin) < 5000.0
 
 
 @pytestmark_integration
@@ -478,6 +642,80 @@ def test_adaptive_lam01_stress(tmp_path: Path) -> None:
         resample_velocities=True,
         num_molecules=250,
         enable_fkt=False,
+    )
+    csv = np.genfromtxt(f"{prefix}_energies.csv", delimiter=",", names=True)
+    T_kin = np.atleast_1d(csv["T_kinetic_K"])
+    assert np.all(np.isfinite(T_kin))
+    assert np.max(T_kin) < 500.0
+
+
+_CAMPAIGN_LAMBDAS = [0.0, 0.01, 0.016667, 0.023333, 0.03]
+_PRODUCTION_DIPOLE_WINDOWS = [(150.0, 50.0), (2450.0, 50.0)]
+
+
+def _run_seed42_production_faithful(
+    tmp_path: Path,
+    *,
+    lambda_coupling: float,
+    runtime_ps: float = 2500.0,
+) -> Path:
+    """Pilot replica-0 configuration with FKT + IR dipole windows."""
+    tag = str(lambda_coupling).replace(".", "p")
+    prefix = tmp_path / f"adapt_seed42_lam{tag}_{int(runtime_ps)}ps"
+    ic = C2F_ROOT / "equilibrium_output" / "eq10ns100K_lam0_final_state.npz"
+    if not ic.is_file():
+        pytest.skip(f"Missing IC: {ic}")
+
+    rce.run_cavity_equilibrium(
+        temperature_K=100.0,
+        runtime_ps=runtime_ps,
+        lambda_coupling=lambda_coupling,
+        include_dipole_self_energy=True,
+        output_prefix=str(prefix),
+        seed=42,
+        sample_interval_ps=1.0,
+        finite_q=False,
+        platform_name="CUDA",
+        coupling_start_ps=200.0,
+        adaptive=True,
+        initial_state=ic,
+        resample_velocities=True,
+        num_molecules=250,
+        enable_fkt=True,
+        dipole_windows=_PRODUCTION_DIPOLE_WINDOWS,
+        dipole_interval_ps=0.001,
+    )
+    return prefix
+
+
+@pytestmark_integration
+@pytest.mark.slow
+@pytest.mark.skipif(not _cuda_cavity_available(), reason="CUDA required")
+@pytest.mark.parametrize("lambda_coupling", _CAMPAIGN_LAMBDAS, ids=lambda x: f"lam{x:g}")
+def test_adaptive_seed42_all_lambdas_2500ps(
+    tmp_path: Path, lambda_coupling: float
+) -> None:
+    """Production-faithful pilot: seed 42, 2500 ps, FKT + dipole for each λ."""
+    prefix = _run_seed42_production_faithful(
+        tmp_path, lambda_coupling=lambda_coupling, runtime_ps=2500.0
+    )
+    csv = np.genfromtxt(f"{prefix}_energies.csv", delimiter=",", names=True)
+    T_kin = np.atleast_1d(csv["T_kinetic_K"])
+    times = np.atleast_1d(csv["time_ps"])
+    assert np.all(np.isfinite(T_kin))
+    assert np.max(T_kin) < 500.0
+    assert float(times[-1]) >= 2450.0
+    meta = Path(f"{prefix}_meta.txt").read_text(encoding="utf-8")
+    assert "adaptive_module_sha256=" in meta
+
+
+@pytestmark_integration
+@pytest.mark.slow
+@pytest.mark.skipif(not _cuda_cavity_available(), reason="CUDA required")
+def test_adaptive_seed42_lambda003_2500ps(tmp_path: Path) -> None:
+    """Historically worst λ=0.03 at full production length."""
+    prefix = _run_seed42_production_faithful(
+        tmp_path, lambda_coupling=0.03, runtime_ps=2500.0
     )
     csv = np.genfromtxt(f"{prefix}_energies.csv", delimiter=",", names=True)
     T_kin = np.atleast_1d(csv["T_kinetic_K"])

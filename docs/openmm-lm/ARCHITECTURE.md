@@ -55,6 +55,14 @@ Controllers, thermostats, adaptive coupling, calibration, and simulation helpers
 demos and `research/c2f/run_c2f.py`. Public API is intentionally small; see
 [`wrappers/python/openmm/cavitymd/README.md`](../../wrappers/python/openmm/cavitymd/README.md).
 
+### Unified force fields (`openmm.cavitymd.forcefields`)
+
+Single registry for classical and ML dipole backends. Every entry exposes
+`evaluate_dipole_response(state) -> DipoleResponse` with molecular dipole μ (e·nm)
+and Born effective charges Z = ∂μ/∂r (n, 3, 3). Classical backends use native
+`CavityForce` when Z = qᵢ δ; ML backends delegate to `openmmml.cavity_coupling`.
+See [`forcefields/README.md`](../../wrappers/python/openmm/cavitymd/forcefields/README.md).
+
 ### ML + RPMD
 
 - `third_party/openmm-ml/` — FairChem/UMA/AIMNet integration (`pixi run -e ml install-ml`)

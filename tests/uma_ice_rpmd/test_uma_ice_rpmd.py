@@ -83,7 +83,7 @@ from openmm import app, unit, Vec3
 from openmm import RPMDIntegrator, Context, Platform, RPMDMonteCarloBarostat
 
 # After OpenMM (conda/site-packages), prefer this repo's ``openmmml`` so batched UMA
-# ``openmmml`` is installed from the ``openmm-ml`` submodule (``pip install -e openmm-ml``).
+# ``openmmml`` is installed from the ``third_party/openmm-ml`` submodule (``pip install -e third_party/openmm-ml``).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 _WRAPPERS_PY = _REPO_ROOT / "wrappers" / "python"
 if _WRAPPERS_PY.is_dir():

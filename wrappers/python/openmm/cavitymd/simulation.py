@@ -5,7 +5,16 @@ from pathlib import Path
 from .constants import Units
 from .trackers import ElapsedTimeTracker, EnergyTracker, TemperatureTracker
 from .thermostats import DualThermostat
-from .variants import CouplingVariant
+from .coupling import configure_coupling, configure_multimode_adaptive_square_wave
+from .variants import (
+    AdaptiveSquareWaveVariant,
+    CouplingVariant,
+    DecayingSquareWaveVariant,
+    ExponentialWaveVariant,
+    SinusoidVariant,
+    SquareWaveVariant,
+    StepVariant,
+)
 from .feedback import EmpiricalTemperatureFeedback, GradientDescentFeedback
 from .controllers import DiffEqController, SimpleSetpointController, PIDControl
 
@@ -13,40 +22,23 @@ from .controllers import DiffEqController, SimpleSetpointController, PIDControl
 def setup_gpu_square_wave(cavity_force, amplitude: float, period_ps: float,
                           duty_cycle: float = 0.5, start_time_ps: float = 0.0,
                           stop_time_ps: float = -1.0) -> None:
-    """Configure GPU-side square-wave modulation on a CavityForce.
-
-    Once set, the CUDA/OpenCL kernel evaluates lambda from time_ps each
-    step with zero host round-trips.  Call updateParametersInContext()
-    once after this to push the modulation params to the device.
-
-    Parameters
-    ----------
-    cavity_force : openmm.CavityForce
-    amplitude : float
-        Lambda value when coupling is "on".
-    period_ps : float
-        Full period (ps).
-    duty_cycle : float
-        Fraction of period that is "on" [0,1]. Default 0.5.
-    start_time_ps : float
-        When modulation activates (ps). Default 0.
-    stop_time_ps : float
-        When modulation deactivates (-1 = never). Default -1.
-    """
-    import openmm
-    cavity_force.setCouplingModulation(
-        openmm.CavityForce.ModulationSquareWave,
-        amplitude, period_ps, duty_cycle, start_time_ps, stop_time_ps, 1.0,
+    """Configure GPU-side square-wave modulation on a CavityForce."""
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        SquareWaveVariant(amplitude, period_ps, duty_cycle, start_time_ps, stop),
+        use_gpu=True,
     )
 
 
 def setup_gpu_step(cavity_force, amplitude: float, start_time_ps: float,
                    stop_time_ps: float = -1.0) -> None:
     """Configure GPU-side step-function modulation."""
-    import openmm
-    cavity_force.setCouplingModulation(
-        openmm.CavityForce.ModulationStep,
-        amplitude, 0.0, 0.5, start_time_ps, stop_time_ps, 1.0,
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        StepVariant(amplitude, start_time_ps, turn_off_time_ps=stop),
+        use_gpu=True,
     )
 
 
@@ -54,10 +46,16 @@ def setup_gpu_decaying_step(cavity_force, amplitude: float,
                             start_time_ps: float, decay_tau_ps: float,
                             stop_time_ps: float = -1.0) -> None:
     """Configure GPU-side decaying-step modulation."""
-    import openmm
-    cavity_force.setCouplingModulation(
-        openmm.CavityForce.ModulationDecayingStep,
-        amplitude, 0.0, 0.5, start_time_ps, stop_time_ps, decay_tau_ps,
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        StepVariant(
+            amplitude,
+            start_time_ps,
+            decay_time_constant_ps=decay_tau_ps,
+            turn_off_time_ps=stop,
+        ),
+        use_gpu=True,
     )
 
 
@@ -72,20 +70,22 @@ def setup_gpu_adaptive_square_wave(
     min_amplitude: float = 1e-8,
     max_amplitude: float = 0.1,
 ) -> None:
-    """Configure GPU-side adaptive square-wave modulation.
-
-    The kernel updates amplitude once per period on the GPU:
-    ``g_next = target_coupling * sqrt(target_temperature_K / T_bath)``
-    where T_bath is read from the BussiThermostat context parameter.
-    No Python round-trip needed.
-
-    Call ``cavity_force.updateParametersInContext(context)`` once after
-    this to push the params to the device.
-    """
-    cavity_force.setAdaptiveSquareWaveModulation(
-        target_coupling, target_temperature_K,
-        period_ps, duty_cycle, start_time_ps, stop_time_ps,
-        min_amplitude, max_amplitude,
+    """Configure GPU-side adaptive square-wave modulation."""
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        AdaptiveSquareWaveVariant(
+            target_coupling,
+            target_temperature_K,
+            period_ps,
+            lambda: target_temperature_K,
+            duty_cycle=duty_cycle,
+            start_time_ps=start_time_ps,
+            stop_time_ps=stop,
+            min_amplitude=min_amplitude,
+            max_amplitude=max_amplitude,
+        ),
+        use_gpu=True,
     )
 
 
@@ -100,9 +100,19 @@ def setup_gpu_decaying_square_wave(
     minimum_amplitude: float = 1e-8,
 ) -> None:
     """Configure GPU-side decaying square-wave modulation."""
-    cavity_force.setDecayingSquareWaveModulation(
-        initial_amplitude, period_ps, duty_cycle, decay_rate_per_period,
-        start_time_ps, stop_time_ps, minimum_amplitude,
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        DecayingSquareWaveVariant(
+            initial_amplitude,
+            period_ps,
+            decay_rate_per_period,
+            duty_cycle,
+            start_time_ps,
+            stop,
+            minimum_amplitude,
+        ),
+        use_gpu=True,
     )
 
 
@@ -115,8 +125,11 @@ def setup_gpu_sinusoid(
     stop_time_ps: float = -1.0,
 ) -> None:
     """Configure GPU-side sinusoidal coupling modulation."""
-    cavity_force.setSinusoidModulation(
-        amplitude, period_ps, phase_offset, start_time_ps, stop_time_ps,
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        SinusoidVariant(amplitude, period_ps, phase_offset, start_time_ps, stop),
+        use_gpu=True,
     )
 
 
@@ -129,8 +142,13 @@ def setup_gpu_exponential_wave(
     stop_time_ps: float = -1.0,
 ) -> None:
     """Configure GPU-side exponential-wave coupling modulation."""
-    cavity_force.setExponentialWaveModulation(
-        amplitude, period_ps, decay_tau_ps, start_time_ps, stop_time_ps,
+    stop = None if stop_time_ps < 0 else stop_time_ps
+    configure_coupling(
+        cavity_force,
+        ExponentialWaveVariant(
+            amplitude, period_ps, decay_tau_ps, start_time_ps, stop
+        ),
+        use_gpu=True,
     )
 
 
@@ -142,28 +160,15 @@ def setup_multimode_adaptive_square_wave(
     start_time_ps: float = 0.0,
     stop_time_ps: float = -1.0,
 ) -> None:
-    """Configure per-mode adaptive square-wave on a MultiModeCavityForce.
-
-    All modes share timing (period, duty cycle, start/stop). Each mode
-    adapts its amplitude independently on the GPU:
-    ``g_next_n = g_target_n * sqrt(T_target_n / T_bath)``
-
-    Parameters
-    ----------
-    force : openmm.MultiModeCavityForce
-    period_ps : float
-        Square-wave period (ps), shared by all modes.
-    duty_cycle : float
-        Fraction ON [0,1], shared by all modes.
-    mode_params : list of (g_target, T_target_K, min_amp, max_amp) tuples
-        One entry per mode, in order (mode 0, mode 1, ...).
-    start_time_ps, stop_time_ps : float
-        Activation window.
-    """
-    force.setAdaptiveSquareWaveModulation(period_ps, duty_cycle,
-                                          start_time_ps, stop_time_ps)
-    for i, (g, t, mn, mx) in enumerate(mode_params):
-        force.setModeModulationParams(i, g, t, mn, mx)
+    """Configure per-mode adaptive square-wave on a MultiModeCavityForce."""
+    configure_multimode_adaptive_square_wave(
+        force,
+        period_ps,
+        duty_cycle,
+        mode_params,
+        start_time_ps,
+        stop_time_ps,
+    )
 
 
 def configure_dipole_self_energy(force, include: bool = True) -> None:

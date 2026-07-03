@@ -28,11 +28,17 @@ from openmm.cavitymd import (
 )
 from openmm.cavitymd.adaptive import (
     DT_MAX_PS,
+    DT_MIN_PS,
+    AdaptiveParityConfig,
+    adaptive_module_sha256,
     calibrate_epsilon,
     create_adaptive_integrator,
     create_adaptive_state,
     advance_to_time_step_on,
+    advance_to_time_step_on_rms,
+    default_parity_config,
     particle_masses_amu,
+    would_cross_coupling_switch,
 )
 
 # Abort production trajectories when kinetic temperature exceeds this (K).
@@ -181,6 +187,9 @@ def run_cavity_equilibrium(
     num_molecules: int = NUM_MOL,
     adaptive: bool = False,
     dt_max_ps: float = DT_MAX_PS,
+    adaptive_parity_config: AdaptiveParityConfig | None = None,
+    use_variable_verlet: bool = False,
+    hybrid_safety_verlet: bool = False,
     no_resume: bool = False,
 ) -> Path:
     """Run fixed-T NVT with cavity coupling; return final-state path.
@@ -339,7 +348,11 @@ def run_cavity_equilibrium(
         system.addForce(displacer)
 
     DualThermostat.setup_bussi_for_system(
-        system, list(range(n_atoms)), temperature_K, BUSSI_TAU_PS
+        system,
+        list(range(n_atoms)),
+        temperature_K,
+        BUSSI_TAU_PS,
+        random_number_seed=seed if seed != 0 else 1,
     )
     group_map = assign_force_groups(
         system, include_dipole_self_energy=include_dipole_self_energy
@@ -351,7 +364,12 @@ def run_cavity_equilibrium(
     eps_relaxed: float | None = None
     force_max_norm_initial: float | None = None
     if adaptive:
-        integrator = create_adaptive_integrator(dt_max_ps)
+        integrator = create_adaptive_integrator(
+            dt_max_ps,
+            use_variable_verlet=use_variable_verlet,
+            hybrid_safety_verlet=hybrid_safety_verlet,
+            random_number_seed=seed if seed != 0 else 1,
+        )
         resume_time_for_state = resume_time_ps if resuming else 0.0
     else:
         integrator = openmm.VerletIntegrator(dt_ps * unit.picosecond)
@@ -396,8 +414,12 @@ def run_cavity_equilibrium(
 
     if adaptive:
         masses_amu = particle_masses_amu(system)
+        parity_cfg = adaptive_parity_config or default_parity_config()
         eps_relaxed, force_max_norm_initial = calibrate_epsilon(
-            context, system, target_dt_ps=dt_max_ps
+            context,
+            system,
+            target_dt_ps=dt_max_ps,
+            absolute_error_tolerance=parity_cfg.absolute_error_tolerance,
         )
         resume_time_for_state = resume_time_ps if resuming else 0.0
         adaptive_state = create_adaptive_state(
@@ -405,6 +427,8 @@ def run_cavity_equilibrium(
             coupling_start_ps,
             initial_time_ps=resume_time_for_state,
             eps_relaxed=eps_relaxed,
+            omegac_au=omegac_au,
+            parity_config=parity_cfg,
         )
         if resuming and adaptive_ramp_start_ps is not None:
             adaptive_state["ramp_t0"] = adaptive_ramp_start_ps
@@ -506,6 +530,10 @@ def run_cavity_equilibrium(
             print(f"  Resume time {resume_time_ps:.3f} ps >= runtime; nothing to do.")
             return final_path if final_path.exists() else ckpt_path
 
+    def _guard_molecular_com_velocity() -> None:
+        """Strip molecular COM drift before snapshot writes (not during integration)."""
+        remove_molecular_com_velocity(context, system, n_atoms)
+
     def _maybe_update_fkt(time_ps: float) -> None:
         nonlocal next_fkt_ps
         if fkt_tracker is None or time_ps + 1e-9 < fkt_t0_ps:
@@ -550,6 +578,32 @@ def run_cavity_equilibrium(
             return None
         return next_ps
 
+    def _advance_fixed_to(target_time_ps: float) -> None:
+        """Integrate with fixed dt, splitting steps at the coupling switch time."""
+        while True:
+            time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
+            if time_ps >= target_time_ps - 1e-15:
+                break
+
+            step_dt_ps = dt_ps
+            if would_cross_coupling_switch(
+                time_ps,
+                dt_ps,
+                coupling_start_ps,
+                lambda_coupling,
+            ):
+                step_dt_ps = max(DT_MIN_PS, coupling_start_ps - time_ps)
+                integrator.setStepSize(step_dt_ps * unit.picosecond)
+
+            integrator.step(1)
+            if step_dt_ps != dt_ps:
+                integrator.setStepSize(dt_ps * unit.picosecond)
+
+            thermostat.apply_cavity_thermostat_step(step_dt_ps)
+            step_time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
+            _maybe_update_fkt(step_time_ps)
+            _maybe_sample_dipole(step_time_ps)
+
     def _advance_adaptive_to(target_time_ps: float) -> None:
         """Integrate to target_time_ps; FKT in on_step, dipole at grid points only."""
         while True:
@@ -565,18 +619,24 @@ def run_cavity_equilibrium(
             def _on_fkt_step(step_time_ps: float, _step_dt_ps: float) -> None:
                 _maybe_update_fkt(step_time_ps)
 
-            advance_to_time_step_on(
-                context,
-                integrator,
-                thermostat,
-                system=system,
-                target_time_ps=sub_target,
-                lambda_coupling=lambda_coupling,
-                coupling_start_ps=coupling_start_ps,
-                state=adaptive_state,
-                masses_amu=masses_amu,
-                on_step=_on_fkt_step,
+            advance_fn = (
+                advance_to_time_step_on_rms
+                if use_variable_verlet
+                else advance_to_time_step_on
             )
+            advance_kwargs: dict = {
+                "context": context,
+                "integrator": integrator,
+                "thermostat": thermostat,
+                "target_time_ps": sub_target,
+                "lambda_coupling": lambda_coupling,
+                "coupling_start_ps": coupling_start_ps,
+                "state": adaptive_state,
+            }
+            if not use_variable_verlet:
+                advance_kwargs["system"] = system
+                advance_kwargs["masses_amu"] = masses_amu
+            advance_fn(**advance_kwargs, on_step=_on_fkt_step)
             time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
             if dipole_t is not None and time_ps + 1e-9 >= dipole_t:
                 _maybe_sample_dipole(time_ps)
@@ -634,13 +694,7 @@ def run_cavity_equilibrium(
             if adaptive:
                 _advance_adaptive_to(target_time)
             else:
-                steps = max(1, int(round((target_time - context.getState().getTime().value_in_unit(unit.picosecond)) / dt_ps)))
-                for _ in range(steps):
-                    integrator.step(1)
-                    thermostat.apply_cavity_thermostat_step(dt_ps)
-                    step_time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
-                    _maybe_update_fkt(step_time_ps)
-                    _maybe_sample_dipole(step_time_ps)
+                _advance_fixed_to(target_time)
 
             time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
             energies = energy_tracker.get_energies()
@@ -745,6 +799,8 @@ def run_cavity_equilibrium(
             meta_file.write(
                 f"adaptive_ramp_start_ps={_adaptive_ramp_start_ps(coupling_start_ps, lambda_coupling)}\n"
             )
+            meta_file.write(f"adaptive_module_sha256={adaptive_module_sha256()}\n")
+            meta_file.write(f"omegac_au={omegac_au}\n")
         else:
             meta_file.write(f"dt_ps={dt_ps}\n")
         meta_file.write(f"finite_q={finite_q}\n")

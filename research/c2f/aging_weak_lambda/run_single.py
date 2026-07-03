@@ -12,6 +12,7 @@ _C2F_ROOT = _SCRIPT_DIR.parent
 if str(_C2F_ROOT) not in sys.path:
     sys.path.insert(0, str(_C2F_ROOT))
 
+from openmm.cavitymd.adaptive import DT_MAX_PS  # noqa: E402
 from run_cavity_equilibrium import run_cavity_equilibrium  # noqa: E402
 
 from config import (  # noqa: E402
@@ -65,11 +66,23 @@ def main() -> None:
     )
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--no-fkt", action="store_true")
+    parser.add_argument(
+        "--no-dipole",
+        action="store_true",
+        help="Disable IR dipole windows even for IR subset replicas",
+    )
     parser.add_argument("--platform", default=None)
     parser.add_argument(
         "--adaptive",
         action="store_true",
-        help="Use cav-hoomd max-metric adaptive Verlet integrator (recommended at λ=0.03)",
+        default=True,
+        help="Use cav-hoomd max-metric adaptive Verlet integrator (default: on)",
+    )
+    parser.add_argument(
+        "--no-adaptive",
+        action="store_false",
+        dest="adaptive",
+        help="Use fixed dt=1 fs Verlet instead of adaptive integrator",
     )
     parser.add_argument(
         "--campaign-dir",
@@ -92,6 +105,12 @@ def main() -> None:
         action="store_true",
         help="Ignore checkpoint and start fresh from IC",
     )
+    parser.add_argument(
+        "--dt-max-ps",
+        type=float,
+        default=DT_MAX_PS,
+        help=f"Max adaptive step size in ps (default {DT_MAX_PS} = 1.0 fs)",
+    )
     args = parser.parse_args()
 
     campaign_root = args.campaign_dir
@@ -104,7 +123,7 @@ def main() -> None:
     fkt_max_refs = FKT_MAX_REFS
     snapshot_interval = SNAPSHOT_INTERVAL_PS
     dipole_windows: list[tuple[float, float]] | None = None
-    if args.replica < IR_SUBSET_REPLICAS:
+    if not args.no_dipole and args.replica < IR_SUBSET_REPLICAS:
         if args.ir_windows:
             dipole_windows = [(float(s), float(l)) for s, l in args.ir_windows]
         else:
@@ -155,6 +174,7 @@ def main() -> None:
         dipole_interval_ps=DIPOLE_INTERVAL_PS,
         num_molecules=args.num_molecules,
         adaptive=args.adaptive,
+        dt_max_ps=args.dt_max_ps,
         no_resume=args.no_resume,
     )
 

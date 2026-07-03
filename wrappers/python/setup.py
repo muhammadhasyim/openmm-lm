@@ -151,7 +151,8 @@ def buildKeywordDictionary(major_version_num=MAJOR_VERSION_NUM,
                                           "openmm.app.internal.pdbx",
                                           "openmm.app.internal.pdbx.reader",
                                           "openmm.app.internal.pdbx.writer",
-                                          "openmm.cavitymd"]
+                                          "openmm.cavitymd",
+                                          "openmm.cavitymd.forcefields"]
     setupKeywords["data_files"]        = []
     setupKeywords["package_data"]      = {"openmm" : [],
                                           "openmm.app" : ['data/*.xml', 'data/*.pdb', 'data/amber14/*.xml', 'data/amber19/*.xml', 'data/charmm36/*.xml', 'data/charmm36_2024/*.xml', 'data/implicit/*.xml'],

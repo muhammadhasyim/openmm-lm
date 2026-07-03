@@ -16,8 +16,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from config import (
+    ANALYSIS_LAMBDAS,
     FIGURES_DIR,
-    LAMBDAS,
     N_REPLICAS,
     POTENTIAL_ENERGY_VS_T,
     RELAXATION_TIMES_VS_T,
@@ -31,16 +31,19 @@ from config import (
 from fkt_utils import (
     average_fkt_over_replicas,
     average_phi_over_replicas,
+    build_energy_csv_index,
     collect_replica_fkt_files,
     extract_tau_s,
     list_available_replicas,
+    resolve_energy_csv,
     waiting_time_ps,
 )
+from paper_style import apply_paper_style, paper_legend, save_figure, style_axes
 
 
 def _load_cavitymd_analysis():
     analysis_path = (
-        Path(__file__).resolve().parents[4]
+        Path(__file__).resolve().parents[3]
         / "wrappers"
         / "python"
         / "openmm"
@@ -81,24 +84,18 @@ def _structural_calibrator():
 
 
 def _structural_Ts_from_csv(data: np.ndarray) -> np.ndarray:
-    """Infer T_s from nonbonded energy when CSV T_s_fictive is unset."""
+    """Infer T_s uniformly from nonbonded energy via the fitted calibration model."""
     calibrator, units = _structural_calibrator()
-    T_s_raw = np.asarray(data["T_s_fictive_K"], dtype=float)
     E_nb = np.asarray(data["E_nonbonded_kjmol"], dtype=float)
     order = np.argsort(calibrator.energies)
     e_sorted = calibrator.energies[order]
     e_lo, e_hi = float(e_sorted[0]), float(e_sorted[-1])
 
-    T_s = np.full_like(T_s_raw, np.nan, dtype=float)
-    valid_csv = np.isfinite(T_s_raw) & (T_s_raw > 0.0) & (T_s_raw < 600.0)
-    T_s[valid_csv] = T_s_raw[valid_csv]
-
     E_hartree = E_nb * units.KJMOL_TO_HARTREE
     physical = np.isfinite(E_hartree) & (E_hartree >= e_lo) & (E_hartree <= e_hi)
-    need_inv = (~valid_csv) & physical
-    if np.any(need_inv):
-        T_s[need_inv] = calibrator.calculate_temperature_array(E_hartree[need_inv])
-
+    T_s = np.full(E_nb.shape, TEMPERATURE_K, dtype=float)
+    if np.any(physical):
+        T_s[physical] = calibrator.calculate_temperature_array(E_hartree[physical])
     invalid = ~np.isfinite(T_s) | (T_s <= 0.0) | (T_s > 600.0)
     T_s[invalid] = TEMPERATURE_K
     return T_s
@@ -121,11 +118,13 @@ def _csv_is_sane(data: np.ndarray) -> bool:
 def _load_Ts_timeseries(
     job_dir: Path, lam: float, replicas: list[int]
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Return (times, mean T_s) for diagnostics / Fig 4c–d overlays."""
+    index = build_energy_csv_index(job_dir, lam)
     times_list: list[np.ndarray] = []
     ts_list: list[np.ndarray] = []
     for replica in replicas:
-        csv_path = job_dir / f"{run_prefix(lam, replica)}_energies.csv"
-        if not csv_path.exists():
+        csv_path = resolve_energy_csv(job_dir, lam, replica, index)
+        if csv_path is None:
             continue
         data = np.genfromtxt(
             csv_path, delimiter=",", names=True, missing_values="", usemask=False
@@ -143,6 +142,40 @@ def _load_Ts_timeseries(
         [np.interp(t_ref, times_list[i], ts_list[i]) for i in range(len(times_list))]
     )
     return t_ref, np.nanmean(stack, axis=0)
+
+
+def _load_h_tn_timeseries(
+    job_dir: Path,
+    lam: float,
+    replicas: list[int],
+    tn: ToolNarayanaswamy,
+    *,
+    rate_scale: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Integrate TN material time per replica, then ensemble-average (avoids Jensen bias)."""
+    index = build_energy_csv_index(job_dir, lam)
+    t_ref: np.ndarray | None = None
+    h_stack: list[np.ndarray] = []
+
+    for replica in replicas:
+        csv_path = resolve_energy_csv(job_dir, lam, replica, index)
+        if csv_path is None:
+            continue
+        data = np.genfromtxt(
+            csv_path, delimiter=",", names=True, missing_values="", usemask=False
+        )
+        if not _csv_is_sane(data):
+            continue
+        t = np.asarray(data["time_ps"], dtype=float)
+        ts = _structural_Ts_from_csv(data)
+        h = tn.integrate_tn(t, ts, switch_time_ps=SWITCH_TIME_PS, rate_scale=rate_scale)
+        if t_ref is None:
+            t_ref = t
+        h_stack.append(np.interp(t_ref, t, h))
+
+    if t_ref is None or not h_stack:
+        return np.array([]), np.array([])
+    return t_ref, np.nanmean(np.vstack(h_stack), axis=0)
 
 
 def _tau_tw_table(job_dir: Path, lam: float, replicas: list[int]) -> tuple[np.ndarray, np.ndarray]:
@@ -232,34 +265,6 @@ def _ensure_phi_starts_at_one(
     return lags, phi_out
 
 
-def _fit_collapse_amplitude(
-    h_series: list[np.ndarray],
-    phi_series: list[np.ndarray],
-    beta: float = 0.55,
-) -> float:
-    """Least-squares amplitude A so A*exp(-h^beta) matches collapsed ISF in mid-h window."""
-    h_parts: list[np.ndarray] = []
-    phi_parts: list[np.ndarray] = []
-    for h_arr, phi_arr in zip(h_series, phi_series):
-        n = min(h_arr.size, phi_arr.size)
-        if n < 3:
-            continue
-        h_parts.append(h_arr[:n])
-        phi_parts.append(phi_arr[:n])
-    if not h_parts:
-        return 1.0
-    h = np.concatenate(h_parts)
-    phi = np.concatenate(phi_parts)
-    mask = (h > 0.03) & (h < 2.0) & (phi > 0.05) & (phi <= 1.05)
-    if int(mask.sum()) < 5:
-        return 1.0
-    model = np.exp(-np.power(h[mask], beta))
-    denom = float(np.dot(model, model))
-    if denom <= 0.0:
-        return 1.0
-    return float(np.dot(phi[mask], model) / denom)
-
-
 def _tn_baseline_arrays(
     tn: ToolNarayanaswamy,
     t_lab: np.ndarray,
@@ -304,7 +309,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
-    parser.add_argument("--lambdas", type=float, nargs="+", default=LAMBDAS)
+    parser.add_argument("--lambdas", type=float, nargs="+", default=ANALYSIS_LAMBDAS)
     parser.add_argument("--replicas", type=int, nargs="+", default=list(range(N_REPLICAS)))
     parser.add_argument("--smoothness-alpha", type=float, default=1.0)
     parser.add_argument("--block-window-ps", type=float, default=10.0)
@@ -315,6 +320,8 @@ def main() -> None:
         help="Max replicas for Fig 4b ISF collapse (full ensemble used for tau if no summary JSON).",
     )
     args = parser.parse_args()
+
+    apply_paper_style(grid=False)
 
     relax_summary_path = args.results_dir / "relaxation_summary.json"
     relax_summary: dict = {}
@@ -341,6 +348,8 @@ def main() -> None:
     h_curves: dict[float, tuple[np.ndarray, np.ndarray]] = {}
     ts_cache: dict[float, tuple[np.ndarray, np.ndarray]] = {}
     h_tn_cache: dict[float, np.ndarray] = {}
+    h_tn_unc_lo: dict[float, np.ndarray] = {}
+    h_tn_unc_hi: dict[float, np.ndarray] = {}
 
     fig_a, ax_a = plt.subplots(figsize=(8, 5))
     collapse_h: list[np.ndarray] = []
@@ -357,6 +366,16 @@ def main() -> None:
     replicas_0 = [r for r in args.replicas if r in list_available_replicas(job_dir_0, 0.0)]
     baseline_tw, baseline_tau = _measured_baseline_arrays(relax_summary, job_dir_0, replicas_0)
 
+    tau_eq_ref = relax_model.get_relaxation_time(TEMPERATURE_K)
+    tau_std_ref = relax_model.get_relaxation_time_std(TEMPERATURE_K)
+    tau_rel_unc = tau_std_ref / max(tau_eq_ref, 1e-12)
+    if tau_std_ref > 0.0:
+        print(
+            f"[fig4] tau_s,eq({TEMPERATURE_K:.0f}K)={tau_eq_ref:.2f} ps "
+            f"(bootstrap σ={tau_std_ref:.2f} ps)",
+            flush=True,
+        )
+
     for lam in plot_lams:
         job_dir = job_dir_path(lam)
         replicas = [r for r in args.replicas if r in list_available_replicas(job_dir, lam)]
@@ -367,11 +386,33 @@ def main() -> None:
         t_ts, T_s = _load_Ts_timeseries(job_dir, lam, replicas)
         ts_cache[lam] = (t_ts, T_s)
         if t_ts.size:
-            h_tn_cache[lam] = tn.integrate_tn(t_ts, T_s, switch_time_ps=SWITCH_TIME_PS)
+            h_tn_cache[lam] = _load_h_tn_timeseries(job_dir, lam, replicas, tn)[1]
+            if tau_rel_unc > 0.0:
+                h_tn_unc_lo[lam] = _load_h_tn_timeseries(
+                    job_dir, lam, replicas, tn, rate_scale=1.0 / (1.0 + tau_rel_unc)
+                )[1]
+                h_tn_unc_hi[lam] = _load_h_tn_timeseries(
+                    job_dir,
+                    lam,
+                    replicas,
+                    tn,
+                    rate_scale=1.0 / max(1.0 - tau_rel_unc, 0.05),
+                )[1]
         print(f"[fig4] lambda={lam:g}: MTTI + ISF collapse...", flush=True)
 
         if lam == 0.0:
             h_eq = _equilibrium_h(t_plot, relax_model)
+            if tau_std_ref > 0.0:
+                aging = _aging_time(t_plot)
+                ax_a.fill_between(
+                    aging,
+                    aging / (tau_eq_ref + tau_std_ref),
+                    aging / max(tau_eq_ref - tau_std_ref, 1e-12),
+                    color="C0",
+                    alpha=0.15,
+                    zorder=2,
+                    label=rf"$\lambda=0$ Eq. 12 $\pm\sigma_{{\tau}}$",
+                )
             ax_a.plot(
                 _aging_time(t_plot),
                 h_eq,
@@ -384,7 +425,14 @@ def main() -> None:
             tw, tau = tau_tw_for_lambda(lam, job_dir, replicas)
             if tw.size >= 2:
                 abs_times = SWITCH_TIME_PS + tw
-                t_grid, h_meas = tn.reconstruct_material_time(
+                n_constraints = tw.size
+                smooth_alpha = args.smoothness_alpha * max(n_constraints, 3) / 13.0
+                tn_lam = ToolNarayanaswamy(
+                    relaxation_model=relax_model,
+                    beta=0.55,
+                    smoothness_alpha=smooth_alpha,
+                )
+                t_grid, h_meas = tn_lam.reconstruct_material_time(
                     abs_times,
                     tau,
                     time_grid_ps=t_plot,
@@ -406,7 +454,14 @@ def main() -> None:
         if tw.size < 2:
             continue
         abs_times = SWITCH_TIME_PS + tw
-        t_grid, h_meas = tn.reconstruct_material_time(
+        n_constraints = tw.size
+        smooth_alpha = args.smoothness_alpha * max(n_constraints, 3) / 13.0
+        tn_lam = ToolNarayanaswamy(
+            relaxation_model=relax_model,
+            beta=0.55,
+            smoothness_alpha=smooth_alpha,
+        )
+        t_grid, h_meas = tn_lam.reconstruct_material_time(
             abs_times,
             tau,
             time_grid_ps=t_plot,
@@ -418,15 +473,27 @@ def main() -> None:
 
         ax_a.plot(_aging_time(t_grid), h_meas, lw=1.5, label=f"$\\lambda$={lam:g}")
         if t_ts.size:
+            line_color = ax_a.lines[-1].get_color()
             ax_a.plot(
                 _aging_time(t_ts),
                 h_tn,
                 ls="--",
                 lw=0.9,
                 alpha=0.35,
-                color=ax_a.lines[-1].get_color(),
+                color=line_color,
                 zorder=1,
             )
+            h_lo = h_tn_unc_lo.get(lam)
+            h_hi = h_tn_unc_hi.get(lam)
+            if h_lo is not None and h_hi is not None and h_lo.size == h_hi.size:
+                ax_a.fill_between(
+                    _aging_time(t_ts),
+                    h_lo,
+                    h_hi,
+                    color=line_color,
+                    alpha=0.08,
+                    zorder=0,
+                )
 
         ref_indices = sorted(
             {idx for r in replicas for idx in collect_replica_fkt_files(job_dir, lam, r)}
@@ -464,21 +531,21 @@ def main() -> None:
     ax_a.set_ylabel("$h_\\lambda(t)$")
     ax_a.set_title("Material time: measured (solid) vs TN (dashed)")
     ax_a.set_ylim(bottom=0.0)
-    ax_a.legend(fontsize=8)
+    style_axes(ax_a, grid=False)
+    paper_legend(ax_a, loc="best", fontsize=9)
     fig_a.tight_layout()
-    fig_a.savefig(args.output_dir / "fig4a_material_time.png", dpi=150)
+    save_figure(fig_a, args.output_dir / "fig4a_material_time")
     plt.close(fig_a)
 
     fig_b, ax_b = plt.subplots(figsize=(6, 5))
     collapse_beta = 0.55
-    collapse_A = _fit_collapse_amplitude(collapse_h, collapse_phi, beta=collapse_beta)
     h_master = np.linspace(0.0, 3.0, 200)
     ax_b.plot(
         h_master,
-        collapse_A * tn.stretched_exponential(h_master),
+        tn.stretched_exponential(h_master, beta=collapse_beta),
         "k--",
         lw=1.5,
-        label=rf"$A\,\Phi(h)$, $A={collapse_A:.2f}$, $\beta={collapse_beta}$",
+        label=rf"$\Phi_k(h)=e^{{-h^\beta}}$, $\beta={collapse_beta}$",
     )
     for h_diff, phi in zip(collapse_h, collapse_phi):
         n = min(h_diff.size, phi.size)
@@ -489,9 +556,10 @@ def main() -> None:
     ax_b.set_title("ISF collapse onto stretched exponential")
     ax_b.set_xlim(0.0, 3.0)
     ax_b.set_ylim(0.0, 1.05)
-    ax_b.legend(fontsize=9)
+    style_axes(ax_b, grid=False)
+    paper_legend(ax_b, loc="best", fontsize=10)
     fig_b.tight_layout()
-    fig_b.savefig(args.output_dir / "fig4b_isf_collapse.png", dpi=150)
+    save_figure(fig_b, args.output_dir / "fig4b_isf_collapse")
     plt.close(fig_b)
 
     baseline_ts = ts_cache.get(0.0, (np.array([]), np.array([])))
@@ -545,9 +613,10 @@ def main() -> None:
     ax_c.set_xlabel("$\\lambda$ (a.u.)")
     ax_c.set_ylabel("$\\tilde{\\tau}_{s,\\mathrm{TN}}$")
     ax_c.set_title("TN-predicted slowdown vs coupling")
-    ax_c.legend(fontsize=8, ncol=2)
+    style_axes(ax_c, grid=False)
+    paper_legend(ax_c, loc="best", fontsize=8, ncol=2)
     fig_c.tight_layout()
-    fig_c.savefig(args.output_dir / "fig4c_tn_tau_tilde_vs_lambda.png", dpi=150)
+    save_figure(fig_c, args.output_dir / "fig4c_tn_tau_tilde_vs_lambda")
     plt.close(fig_c)
 
     fig_d, ax_d = plt.subplots(figsize=(8, 5))
@@ -574,9 +643,10 @@ def main() -> None:
     ax_d.set_xlabel("$t_w$ (ps)")
     ax_d.set_ylabel("$\\tilde{\\tau}_{s,\\mathrm{TN}}$")
     ax_d.set_title("TN-predicted memory vs waiting time")
-    ax_d.legend(fontsize=8)
+    style_axes(ax_d, grid=False)
+    paper_legend(ax_d, loc="best", fontsize=9)
     fig_d.tight_layout()
-    fig_d.savefig(args.output_dir / "fig4d_tn_tau_tilde_vs_tw.png", dpi=150)
+    save_figure(fig_d, args.output_dir / "fig4d_tn_tau_tilde_vs_tw")
     plt.close(fig_d)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)

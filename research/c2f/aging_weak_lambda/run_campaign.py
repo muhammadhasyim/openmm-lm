@@ -12,6 +12,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
+from openmm.cavitymd.adaptive import DT_MAX_PS
+
 from config import (
     CAMPAIGN_DIR,
     CAMPAIGN_LOG,
@@ -76,6 +78,7 @@ def _run_one(
     smoke: bool,
     dry_run: bool,
     adaptive: bool,
+    allow_fallback: bool = False,
     retry_fixed_dt: bool = False,
     no_resume: bool = False,
     num_molecules: int = REFERENCE_NUM_MOL,
@@ -83,6 +86,7 @@ def _run_one(
     platform: str | None = None,
     campaign_root: Path | None = None,
     ir_windows: list[tuple[float, float]] | None = None,
+    dt_max_ps: float = DT_MAX_PS,
 ) -> dict:
     run_script = CAMPAIGN_DIR / "run_single.py"
     label = f"lam={lam:g} rep={replica}"
@@ -102,6 +106,7 @@ def _run_one(
         cmd.append("--smoke")
     if adaptive and not retry_fixed_dt:
         cmd.append("--adaptive")
+        cmd.extend(["--dt-max-ps", str(dt_max_ps)])
     if no_resume:
         cmd.append("--no-resume")
     if num_molecules != REFERENCE_NUM_MOL:
@@ -141,11 +146,13 @@ def _run_one(
         "integrator_metric": (
             "max_force" if adaptive and not retry_fixed_dt else "fixed_dt"
         ),
+        "dt_max_ps": dt_max_ps if adaptive and not retry_fixed_dt else None,
     }
 
     if (
         rc != 0
         and adaptive
+        and allow_fallback
         and retry_fixed_dt is False
         and not dry_run
         and not smoke
@@ -169,6 +176,7 @@ def _run_one(
             platform=platform,
             campaign_root=campaign_root,
             ir_windows=ir_windows,
+            dt_max_ps=dt_max_ps,
         )
         record["fallback"] = fallback
         record["returncode"] = fallback["returncode"]
@@ -202,7 +210,19 @@ def main() -> None:
     parser.add_argument(
         "--adaptive",
         action="store_true",
-        help="Use cav-hoomd max-metric adaptive Verlet integrator in each trajectory",
+        default=True,
+        help="Use cav-hoomd max-metric adaptive Verlet integrator (default: on)",
+    )
+    parser.add_argument(
+        "--no-adaptive",
+        action="store_false",
+        dest="adaptive",
+        help="Use fixed dt=1 fs Verlet instead of adaptive integrator",
+    )
+    parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="On adaptive failure, retry with fixed dt=1 fs (disabled by default)",
     )
     parser.add_argument(
         "--no-resume",
@@ -240,6 +260,12 @@ def main() -> None:
         type=float,
         default=None,
         help="IR dipole windows forwarded to run_single.py",
+    )
+    parser.add_argument(
+        "--dt-max-ps",
+        type=float,
+        default=DT_MAX_PS,
+        help=f"Max adaptive step size in ps (default {DT_MAX_PS} = 1.0 fs)",
     )
     args = parser.parse_args()
 
@@ -302,6 +328,7 @@ def main() -> None:
         platform=args.platform,
         campaign_root=campaign_root,
         ir_windows=ir_windows,
+        dt_max_ps=args.dt_max_ps,
     )
 
     if args.jobs == 1:
@@ -315,7 +342,9 @@ def main() -> None:
                     args.smoke,
                     args.dry_run,
                     args.adaptive,
-                    no_resume=args.no_resume,
+                    args.allow_fallback,
+                    False,
+                    args.no_resume,
                     **run_kwargs,
                 )
             )
@@ -331,6 +360,7 @@ def main() -> None:
                     args.smoke,
                     args.dry_run,
                     args.adaptive,
+                    args.allow_fallback,
                     False,
                     args.no_resume,
                     **run_kwargs,

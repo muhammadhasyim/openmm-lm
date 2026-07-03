@@ -1,2 +1,0 @@
-temperature  harmonic_hartree  lj_hartree  coulombic_hartree
-300.0  0.1103931973  -0.7520765005  0.0000000000

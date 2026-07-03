@@ -40,6 +40,7 @@ from .adaptive import (
     square_wave_on,
     lambda_transition,
     create_adaptive_integrator,
+    create_velocity_verlet_integrator,
     advance_to_time,
 )
 from .simulation import (
@@ -53,6 +54,14 @@ from .simulation import (
     setup_gpu_sinusoid,
     setup_gpu_exponential_wave,
     setup_multimode_adaptive_square_wave,
+)
+from .forcefields import (
+    BuiltCavitySystem,
+    CavityParams,
+    DipoleResponse,
+    build_system,
+    evaluate_dipole,
+    list_forcefields,
 )
 
 __all__ = [
@@ -93,6 +102,7 @@ __all__ = [
     "square_wave_on",
     "lambda_transition",
     "create_adaptive_integrator",
+    "create_velocity_verlet_integrator",
     "advance_to_time",
     "CavityMDSimulation",
     "assign_force_groups",
@@ -104,4 +114,10 @@ __all__ = [
     "setup_gpu_sinusoid",
     "setup_gpu_exponential_wave",
     "setup_multimode_adaptive_square_wave",
+    "BuiltCavitySystem",
+    "CavityParams",
+    "DipoleResponse",
+    "build_system",
+    "evaluate_dipole",
+    "list_forcefields",
 ]

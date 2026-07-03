@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Fig 2a top: IR from fine-sampled dipole windows (up to 5000 cm^-1)."""
+"""Fig 2a top: IR from fine-sampled dipole windows (up to 5000 cm^-1).
+
+Uses in-plane dipole components (x, y) only; the cavity-axis (z) component is excluded.
+"""
 
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -12,6 +14,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import fftpack
 
 from config import (
     DIPOLE_INTERVAL_PS,
@@ -19,31 +22,60 @@ from config import (
     FREQUENCY_CM1,
     IR_SUBSET_REPLICAS,
     IR_WINDOWS,
-    LAMBDAS,
+    ANALYSIS_LAMBDAS,
+    TEMPERATURE_K,
     job_dir_path,
-    run_prefix,
 )
+from fkt_utils import dipole_path
+from paper_style import apply_paper_style, save_figure, style_axes
 
-_C_LIGHT_CM_PS = 2.99792458e10
+BOLTZ = 1.38064852e-23
+LIGHTSPEED = 299792458.0
+REDUCED_PLANCK = 1.05457180013e-34
+
+
+def _vector_dipole_acf(dipole: np.ndarray) -> np.ndarray:
+    """Autocorrelation of in-plane dipole components: sum_d <mu_d(t) mu_d(0)>."""
+    n_frames = dipole.shape[0]
+    n_fft = int(2 ** np.ceil(np.log2(2 * n_frames - 1)))
+    acf = np.zeros(n_frames, dtype=float)
+    for dim in range(min(dipole.shape[1], 2)):
+        comp = dipole[:, dim] - np.mean(dipole[:, dim])
+        fx = np.fft.rfft(comp, n=n_fft)
+        acf += np.fft.irfft(fx * fx.conj()).real[:n_frames]
+    return acf
 
 
 def ir_spectrum_from_dipole(
     dipole: np.ndarray,
     times_ps: np.ndarray,
+    *,
+    temperature_k: float = TEMPERATURE_K,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Dipole autocorrelation FFT; times_ps in ps, output freqs in cm^-1."""
-    dt_ps = float(np.mean(np.diff(times_ps)))
-    if dt_ps <= 0 or dipole.shape[0] < 4:
+    """DCT + quantum correction IR spectrum (cav-hoomd process_dipole_autocorr)."""
+    if dipole.shape[0] < 4:
         return np.array([]), np.array([])
-    dipole = dipole - np.mean(dipole, axis=0, keepdims=True)
-    n_frames = dipole.shape[0]
-    acf = np.zeros(n_frames, dtype=float)
-    for lag in range(n_frames):
-        acf[lag] = np.mean(np.sum(dipole[: n_frames - lag] * dipole[lag:], axis=1))
-    acf = acf / max(acf[0], 1e-30)
-    spec = np.fft.rfft(acf).real
-    freqs_cm1 = np.fft.rfftfreq(acf.size, d=dt_ps * 1e-12) / _C_LIGHT_CM_PS
-    return freqs_cm1, spec
+    times_fs = np.asarray(times_ps, dtype=float) * 1000.0
+    dt_fs = float(np.mean(np.diff(times_fs)))
+    if dt_fs <= 0:
+        return np.array([]), np.array([])
+    dipole = dipole[:, :2] - np.mean(dipole[:, :2], axis=0, keepdims=True)
+    acf = _vector_dipole_acf(dipole)
+    if acf[0] != 0:
+        acf = acf / acf[0]
+
+    timestep_s = dt_fs * 1.0e-15
+    lineshape = fftpack.dct(acf, type=1)[1:]
+    omega = np.linspace(0, 0.5 / timestep_s, acf.size)[1:]
+    freqs_cm1 = omega / (100.0 * LIGHTSPEED)
+    field_description = omega * (
+        1.0 - np.exp(-REDUCED_PLANCK * omega / (BOLTZ * temperature_k))
+    )
+    quantum_correction = omega / (
+        1.0 - np.exp(-REDUCED_PLANCK * omega / (BOLTZ * temperature_k))
+    )
+    spectrum = lineshape * field_description * quantum_correction
+    return freqs_cm1, spectrum
 
 
 def _load_dipole_window(path: Path, window_idx: int) -> tuple[np.ndarray, np.ndarray] | None:
@@ -58,18 +90,20 @@ def _load_dipole_window(path: Path, window_idx: int) -> tuple[np.ndarray, np.nda
     )
 
 
-def _ensemble_spectrum(
+def ensemble_spectrum(
     lam: float,
     window_idx: int,
     replica_end: int,
 ) -> tuple[np.ndarray, np.ndarray] | None:
+    """Ensemble-average IR spectrum for one lambda and dipole window."""
+    job_dir = job_dir_path(lam)
     specs: list[np.ndarray] = []
     freqs_ref: np.ndarray | None = None
     for replica in range(replica_end):
-        dipole_path = job_dir_path(lam) / f"{run_prefix(lam, replica)}_dipole.npz"
-        if not dipole_path.exists():
+        path = dipole_path(job_dir, lam, replica)
+        if path is None:
             continue
-        loaded = _load_dipole_window(dipole_path, window_idx)
+        loaded = _load_dipole_window(path, window_idx)
         if loaded is None:
             continue
         times, dipole = loaded
@@ -86,63 +120,97 @@ def _ensemble_spectrum(
     return freqs_ref, np.mean(np.stack(specs, axis=0), axis=0)
 
 
+def plot_ir_on_axes(
+    axes: list[plt.Axes],
+    lambdas: list[float],
+    *,
+    window_idx: int = 1,
+    replica_end: int = IR_SUBSET_REPLICAS,
+    min_freq_cm1: float = 1200.0,
+    max_freq_cm1: float = 2200.0,
+) -> None:
+    plot_lams = sorted(set(lambdas))
+    for ax, lam in zip(axes, plot_lams):
+        result = ensemble_spectrum(lam, window_idx, replica_end)
+        if result is None:
+            ax.set_title(f"$\\lambda$={lam:g}")
+            continue
+        freqs, spec = result
+        mask = (freqs >= min_freq_cm1) & (freqs <= max_freq_cm1)
+        if not np.any(mask):
+            ax.set_title(f"$\\lambda$={lam:g}")
+            continue
+        peak = max(spec[mask].max(), 1e-30)
+        ax.plot(freqs[mask], spec[mask] / peak, color="C0", lw=1.5)
+        ax.axvline(FREQUENCY_CM1, color="gray", ls="--", lw=1.0)
+        ax.set_title(f"$\\lambda$={lam:g}")
+        ax.set_xlim(min_freq_cm1, max_freq_cm1)
+        ax.set_ylim(0.0, 1.05)
+        ax.set_xlabel(r"frequency (cm$^{-1}$)")
+        if lam == plot_lams[0]:
+            ax.set_ylabel(r"$n(\omega)\alpha(\omega)$ (norm.)")
+        style_axes(ax)
+
+
+def plot_ir_spectra_fig(
+    lambdas: list[float] | None = None,
+    *,
+    window_idx: int = 1,
+    replica_end: int = IR_SUBSET_REPLICAS,
+    min_freq_cm1: float = 1200.0,
+    max_freq_cm1: float = 2200.0,
+) -> plt.Figure:
+    """Paper-style Fig 2a top: one panel per lambda with polariton splitting."""
+    plot_lams = sorted(set(lambdas or ANALYSIS_LAMBDAS))
+    ncols = max(len(plot_lams), 1)
+    fig, axes = plt.subplots(1, ncols, figsize=(3.2 * ncols, 3.2), sharey=True)
+    if ncols == 1:
+        axes = [axes]
+    plot_ir_on_axes(
+        list(axes),
+        plot_lams,
+        window_idx=window_idx,
+        replica_end=replica_end,
+        min_freq_cm1=min_freq_cm1,
+        max_freq_cm1=max_freq_cm1,
+    )
+    win_start, win_len = IR_WINDOWS[window_idx]
+    fig.suptitle(
+        f"IR spectra ($x,y$; late window t={win_start:g}-{win_start + win_len:g} ps, N={replica_end})",
+        y=1.02,
+        fontsize=10,
+    )
+    fig.tight_layout()
+    return fig
+
+
 def main() -> None:
+    apply_paper_style()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=FIGURES_DIR)
-    parser.add_argument("--lambdas", type=float, nargs="+", default=LAMBDAS)
+    parser.add_argument("--lambdas", type=float, nargs="+", default=ANALYSIS_LAMBDAS)
     parser.add_argument("--replica-end", type=int, default=IR_SUBSET_REPLICAS)
-    parser.add_argument("--max-freq-cm1", type=float, default=5000.0)
+    parser.add_argument(
+        "--window-idx",
+        type=int,
+        default=1,
+        help="Dipole window index (default 1 = late-aged window)",
+    )
+    parser.add_argument("--min-freq-cm1", type=float, default=1200.0)
+    parser.add_argument("--max-freq-cm1", type=float, default=2200.0)
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    window_labels = [f"t={start:g}-{start + length:g} ps" for start, length in IR_WINDOWS]
-    colors = plt.cm.viridis(np.linspace(0.15, 0.9, len(args.lambdas)))
-
-    fig, axes = plt.subplots(
-        len(IR_WINDOWS),
-        1,
-        figsize=(8, 4 * len(IR_WINDOWS)),
-        sharex=True,
-        squeeze=False,
+    fig = plot_ir_spectra_fig(
+        args.lambdas,
+        window_idx=args.window_idx,
+        replica_end=args.replica_end,
+        min_freq_cm1=args.min_freq_cm1,
+        max_freq_cm1=args.max_freq_cm1,
     )
-
-    for win_idx, (ax, win_label) in enumerate(zip(axes[:, 0], window_labels)):
-        for lam, color in zip(args.lambdas, colors):
-            result = _ensemble_spectrum(lam, win_idx, args.replica_end)
-            if result is None:
-                continue
-            freqs, spec = result
-            mask = (freqs > 0.0) & (freqs <= args.max_freq_cm1)
-            if not np.any(mask):
-                continue
-            peak = max(spec[mask].max(), 1e-30)
-            ax.plot(
-                freqs[mask],
-                spec[mask] / peak,
-                color=color,
-                label=f"$\\lambda$={lam:g}",
-            )
-        ax.axvline(
-            FREQUENCY_CM1,
-            color="gray",
-            ls=":",
-            lw=1.0,
-            label=f"$\\omega_c$={FREQUENCY_CM1:.0f} cm$^{{-1}}$",
-        )
-        ax.set_ylabel("normalized IR intensity")
-        ax.set_title(f"IR dipole ACF ({win_label}, replicas 0–{args.replica_end - 1})")
-        ax.legend(fontsize=8)
-
-    axes[-1, 0].set_xlabel("frequency (cm$^{-1}$)")
-    fig.suptitle(
-        f"IR from dipole windows (dt={DIPOLE_INTERVAL_PS:g} ps, max {args.max_freq_cm1:g} cm$^{{-1}}$)",
-        y=1.01,
-    )
-    fig.tight_layout()
-    out_path = args.output_dir / "fig2a_ir_spectra.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    out_path = args.output_dir / "fig2a_ir_spectra"
+    save_figure(fig, out_path)
     plt.close(fig)
-    print(f"Wrote {out_path}")
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ These tests require:
     the ``OPENMMML_LES_BEC_WATER_MODEL`` (or OPENMMML_CACE_MODEL_PATH) env var,
     or by cloning the LES-BEC submodule::
 
-        git submodule update --init LES-BEC
-        export OPENMMML_LES_BEC_WATER_MODEL=$PWD/LES-BEC/water/fit/fit_version_4/best_model.pth
+        git submodule update --init third_party/LES-BEC
+        export OPENMMML_LES_BEC_WATER_MODEL=$PWD/third_party/LES-BEC/water/fit/fit_version_4/best_model.pth
 
   - A compatible PyTorch installation
 
@@ -69,6 +69,17 @@ except ImportError:
     HAS_CACE = False
 
 
+def _reference_platform():
+    import openmm
+
+    for name in ("Reference", "CPU"):
+        try:
+            return openmm.Platform.getPlatformByName(name)
+        except openmm.OpenMMException:
+            continue
+    raise RuntimeError("No Reference/CPU OpenMM platform available")
+
+
 def _require_torch_cace():
     if not HAS_TORCH:
         pytest.skip("PyTorch not installed")
@@ -120,11 +131,10 @@ def _make_cace_system_with_cavity(checkpoint: str):
         lambda_coupling=0.01,
         photon_mass=1.0,
         include_dse=True,
-        cavity_particle_index=n_atoms,  # photon added as the last particle
     )
 
-    potential = MLPotential("cace-lr", checkpoint)
-    sys = potential.createMixedSystem(top, cavity=cavity)
+    potential = MLPotential("cace-lr", modelPath=checkpoint)
+    sys = potential.createCavitySystem(top, cavity)
 
     return sys, top, pos_nm, n_atoms
 
@@ -319,14 +329,13 @@ class TestCACECavityTrajectory:
             lambda_coupling=0.01,
             photon_mass=1.0,
             include_dse=True,
-            cavity_particle_index=n_atoms,
         )
 
-        potential = MLPotential("cace-lr", CHECKPOINT)
-        sys = potential.createMixedSystem(top, cavity=cavity)
+        potential = MLPotential("cace-lr", modelPath=CHECKPOINT)
+        sys = potential.createCavitySystem(top, cavity)
 
         integrator = openmm.VerletIntegrator(0.5e-3 * u.picoseconds)
-        platform = openmm.Platform.getPlatformByName("CPU")
+        platform = _reference_platform()
         ctx = openmm.Context(sys, integrator, platform)
 
         # Set positions including photon at origin
@@ -506,3 +515,85 @@ class TestCACECavityTrajectory:
             f"Cavity energy mismatch: recompute={cavity_e_ref:.6f}, "
             f"apply_cavity_coupling={delta_e:.6f}"
         )
+
+
+@pytest.mark.skipif(
+    CHECKPOINT is None,
+    reason="LES-BEC checkpoint not found.",
+)
+class TestCACE100WaterCudaSmoke:
+    """Optional GPU smoke: 100 waters, 100 steps on CUDA (physical GPU 1)."""
+
+    def test_hundred_water_cuda_smoke(self):
+        _require_torch_cace()
+        if os.environ.get("OPENMMML_CUDA_SMOKE", "").strip() != "1":
+            pytest.skip("Set OPENMMML_CUDA_SMOKE=1 to run 100-water CUDA smoke")
+
+        import openmm
+        from openmm.cavitymd.forcefields import CavityParams, build_system, evaluate_dipole
+
+        import sys
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+
+        from examples.cavity.common.water_box import (
+            box_size_nm_for_molecules,
+            make_water_topology,
+        )
+
+        num_molecules = 100
+        box_size_nm = box_size_nm_for_molecules(num_molecules)
+        topology, water_pos_nm = make_water_topology(num_molecules, box_size_nm)
+        n_atoms = water_pos_nm.shape[0]
+
+        cavity = CavityParams(
+            omegac=0.005,
+            lambda_coupling=0.0,
+            photon_mass=1.0,
+            include_dse=True,
+        )
+        built = build_system(
+            "cace-les-bec",
+            topology=topology,
+            cavity=cavity,
+            model_path=CHECKPOINT,
+            use_cuda_bridge=True,
+        )
+        assert built.cavity_backend.value == "cuda_bridge"
+
+        integrator = openmm.LangevinMiddleIntegrator(
+            300 * openmm.unit.kelvin,
+            1.0 / openmm.unit.picosecond,
+            1.0 * openmm.unit.femtoseconds,
+        )
+        platform = openmm.Platform.getPlatformByName("CUDA")
+        simulation = openmm.app.Simulation(
+            topology,
+            built.system,
+            integrator,
+            platform,
+            {"DeviceIndex": "0", "Precision": "single"},
+        )
+
+        import torch
+        from openmmml.cuda_bridge import CACE_BRIDGE_KEY, register_context
+
+        torch.cuda.init()
+        register_context(CACE_BRIDGE_KEY, simulation.context)
+
+        photon = np.zeros((1, 3))
+        all_pos = np.vstack([water_pos_nm, photon])
+        simulation.context.setPositions(all_pos * openmm.unit.nanometer)
+        simulation.context.setVelocitiesToTemperature(300 * openmm.unit.kelvin)
+
+        for _ in range(100):
+            simulation.step(1)
+
+        state = simulation.context.getState(getEnergy=True)
+        resp = evaluate_dipole(built, state)
+        assert resp.bec.shape == (n_atoms, 3, 3)
+        assert np.all(np.isfinite(resp.bec))
+        assert np.all(np.isfinite(resp.dipole_enm))

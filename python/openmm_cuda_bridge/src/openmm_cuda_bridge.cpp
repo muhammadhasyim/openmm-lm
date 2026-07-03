@@ -2,61 +2,104 @@
 #include "openmm/OpenMMException.h"
 #include "openmm/common/ContextSelector.h"
 #include "openmm/internal/ContextImpl.h"
+#include "CudaArray.h"
 #include "CudaContext.h"
 #include "CudaPlatform.h"
 
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 #include <pybind11/pybind11.h>
 #include <torch/extension.h>
 
+#include <cctype>
 #include <cstdint>
-#include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 using namespace OpenMM;
 
 namespace py = pybind11;
 
-#define CHECK_CUDA_RESULT(result, cu, prefix)                                    \
+#define CHECK_CUDA_DRIVER(result, prefix)                                        \
     if ((result) != CUDA_SUCCESS) {                                             \
+        const char* err = nullptr;                                              \
+        cuGetErrorString(static_cast<CUresult>(result), &err);                  \
         std::stringstream msg;                                                  \
-        msg << (prefix) << ": " << (cu).getErrorString(result) << " ("        \
-            << (result) << ") at " << __FILE__ << ":" << __LINE__;            \
+        msg << (prefix) << ": " << (err != nullptr ? err : "unknown CUDA error") \
+            << " (" << (result) << ") at " << __FILE__ << ":" << __LINE__;    \
         throw OpenMMException(msg.str());                                       \
     }
 
-static const char* BRIDGE_KERNEL_SOURCE = R"(
-extern "C" __global__
-void writePositions(const real* __restrict__ posTensor,
-                    real4* __restrict__ posq,
-                    int* __restrict__ atomIndex,
-                    int numAtoms) {
-    for (int atom = blockIdx.x*blockDim.x+threadIdx.x; atom < numAtoms; atom += blockDim.x*gridDim.x) {
-        int index = atomIndex[atom];
-        real4 p = posq[atom];
-        p.x = posTensor[3*index] * real(0.1);
-        p.y = posTensor[3*index+1] * real(0.1);
-        p.z = posTensor[3*index+2] * real(0.1);
-        posq[atom] = p;
+namespace {
+
+std::uintptr_t parse_hex_pointer_from_repr(const std::string& repr) {
+    const std::string marker = "0x";
+    const std::size_t start = repr.find(marker);
+    if (start == std::string::npos) {
+        throw std::runtime_error("could not find a SWIG pointer address in object repr: " + repr);
     }
+    std::size_t end = start + marker.size();
+    while (end < repr.size() && std::isxdigit(static_cast<unsigned char>(repr[end]))) {
+        ++end;
+    }
+    std::uintptr_t value = 0;
+    std::stringstream stream;
+    stream << std::hex << repr.substr(start + marker.size(), end - start - marker.size());
+    stream >> value;
+    if (value == 0) {
+        throw std::runtime_error("parsed a null SWIG pointer from object repr: " + repr);
+    }
+    return value;
 }
 
-extern "C" __global__
-void readForces(const long long* __restrict__ forceBuffers,
-                real* __restrict__ forceTensor,
-                int* __restrict__ atomIndex,
-                int numAtoms,
-                int paddedNumAtoms) {
-    const real scale = real(1.0 / (4294967296.0 * 96.4853321233100184 * 10.0));
-    for (int atom = blockIdx.x*blockDim.x+threadIdx.x; atom < numAtoms; atom += blockDim.x*gridDim.x) {
-        int index = atomIndex[atom];
-        forceTensor[3*index]   = real(forceBuffers[atom]) * scale;
-        forceTensor[3*index+1] = real(forceBuffers[atom+paddedNumAtoms]) * scale;
-        forceTensor[3*index+2] = real(forceBuffers[atom+2*paddedNumAtoms]) * scale;
+std::uintptr_t pointer_from_swig_object(const py::object& object) {
+    py::object raw = py::hasattr(object, "this") ? object.attr("this") : object;
+    try {
+        py::object as_int = py::module_::import("builtins").attr("int")(raw);
+        return static_cast<std::uintptr_t>(as_int.cast<unsigned long long>());
+    } catch (const py::error_already_set&) {
+        PyErr_Clear();
     }
+    return parse_hex_pointer_from_repr(py::repr(raw).cast<std::string>());
 }
-)";
+
+Context& unwrap_context(const py::object& context_object) {
+    auto* context = reinterpret_cast<Context*>(pointer_from_swig_object(context_object));
+    if (context == nullptr) {
+        throw std::runtime_error("received a null OpenMM Context pointer");
+    }
+    return *context;
+}
+
+} // namespace
+
+extern "C" void openmm_cuda_bridge_write_positions(
+        std::uintptr_t pos_tensor_ptr,
+        std::uintptr_t posq_ptr,
+        std::uintptr_t correction_ptr,
+        std::uintptr_t atom_index_ptr,
+        int posq_element_size,
+        int num_atoms,
+        cudaStream_t stream);
+
+extern "C" void openmm_cuda_bridge_read_positions(
+        std::uintptr_t posq_ptr,
+        std::uintptr_t correction_ptr,
+        int posq_element_size,
+        std::uintptr_t atom_index_ptr,
+        std::uintptr_t particle_xyz_ptr,
+        std::uintptr_t slot_xyz_ptr,
+        int num_atoms,
+        cudaStream_t stream);
+
+extern "C" void openmm_cuda_bridge_read_forces(
+        std::uintptr_t force_buffers_ptr,
+        std::uintptr_t force_tensor_ptr,
+        std::uintptr_t atom_index_ptr,
+        int num_atoms,
+        int padded_num_atoms,
+        cudaStream_t stream);
 
 static CudaContext& get_cuda_context(ContextImpl& impl) {
     auto* data = static_cast<CudaPlatform::PlatformData*>(impl.getPlatformData());
@@ -73,23 +116,36 @@ static void* tensor_data_pointer(CudaContext& cu, torch::Tensor& tensor) {
     return tensor.data_ptr<float>();
 }
 
+static cudaStream_t openmm_stream(CudaContext& cu) {
+    return reinterpret_cast<cudaStream_t>(cu.getCurrentStream());
+}
+
+static std::uintptr_t device_pointer(CudaArray& array) {
+    return static_cast<std::uintptr_t>(array.getDevicePointer());
+}
+
+static std::uintptr_t correction_pointer(CudaContext& cu, CudaArray& posq) {
+    CudaArray& correction = cu.getPosqCorrection();
+    if (!correction.isInitialized() || correction.getSize() == 0) {
+        return 0;
+    }
+    if (correction.getElementSize() != posq.getElementSize()) {
+        return 0;
+    }
+    return device_pointer(correction);
+}
+
+
 class CudaBridge {
 public:
-    explicit CudaBridge(std::uintptr_t context_ptr, int groups = 0xFFFFFFFF)
-        : context_(reinterpret_cast<Context*>(context_ptr)),
+    explicit CudaBridge(py::object context_object, int groups = 0xFFFFFFFF)
+        : context_object_(std::move(context_object)),
+          context_(&unwrap_context(context_object_)),
           impl_(&context_->getImplementation()),
           cu_(get_cuda_context(*impl_)),
-          groups_(groups) {
-        CHECK_CUDA_RESULT(cuDevicePrimaryCtxRetain(&primary_context_, cu_.getDevice()), cu_, "Failed to retain CUDA primary context");
-        ContextSelector selector(cu_);
-        module_ = cu_.createModule(BRIDGE_KERNEL_SOURCE, std::map<std::string, std::string>());
-        write_positions_kernel_ = cu_.getKernel(module_, "writePositions");
-        read_forces_kernel_ = cu_.getKernel(module_, "readForces");
-    }
+          groups_(groups) {}
 
-    ~CudaBridge() {
-        cuDevicePrimaryCtxRelease(cu_.getDevice());
-    }
+    ~CudaBridge() = default;
 
     int num_atoms() const {
         return cu_.getNumAtoms();
@@ -107,50 +163,78 @@ public:
         validate_positions(positions_angstrom);
         torch::Tensor pos = canonical_tensor(positions_angstrom);
         void* pos_data = tensor_data_pointer(cu_, pos);
-        int num_atoms = cu_.getNumAtoms();
-
-        CHECK_CUDA_RESULT(cuCtxSynchronize(), cu_, "Failed to synchronize before switching to OpenMM context");
+        const int num_atoms = cu_.getNumAtoms();
         {
             ContextSelector selector(cu_);
-            void* args[] = {
-                &pos_data,
-                &cu_.getPosq().getDevicePointer(),
-                &cu_.getAtomIndexArray().getDevicePointer(),
-                &num_atoms,
-            };
-            cu_.executeKernel(write_positions_kernel_, args, num_atoms);
-            CHECK_CUDA_RESULT(cuCtxSynchronize(), cu_, "Failed to synchronize after writing positions");
+            CudaArray& posq = cu_.getPosq();
+            openmm_cuda_bridge_write_positions(
+                    reinterpret_cast<std::uintptr_t>(pos_data),
+                    device_pointer(posq),
+                    correction_pointer(cu_, posq),
+                    device_pointer(cu_.getAtomIndexArray()),
+                    posq.getElementSize(),
+                    num_atoms,
+                    openmm_stream(cu_));
+            cudaStreamSynchronize(openmm_stream(cu_));
         }
     }
 
-    torch::Tensor compute_forces() {
-        const auto dtype = cu_.getUseDoublePrecision() ? torch::kFloat64 : torch::kFloat32;
-        torch::Tensor forces = torch::empty(
-            {cu_.getNumAtoms(), 3},
-            torch::TensorOptions().device(torch::kCUDA, cu_.getDeviceIndex()).dtype(dtype)
+    torch::Tensor get_positions_angstrom() {
+        const int num_atoms = cu_.getNumAtoms();
+        torch::Tensor positions = torch::empty(
+            {num_atoms, 3},
+            torch::TensorOptions().device(torch::kCUDA, cu_.getDeviceIndex()).dtype(torch::kFloat64)
         );
-        void* force_data = tensor_data_pointer(cu_, forces);
-        int num_atoms = cu_.getNumAtoms();
-        int padded_num_atoms = cu_.getPaddedNumAtoms();
+        torch::Tensor slot_xyz = torch::empty(
+            {num_atoms, 3},
+            torch::TensorOptions().device(torch::kCUDA, cu_.getDeviceIndex()).dtype(torch::kFloat64)
+        );
+
+        {
+            ContextSelector selector(cu_);
+            CudaArray& posq = cu_.getPosq();
+            openmm_cuda_bridge_read_positions(
+                    device_pointer(posq),
+                    correction_pointer(cu_, posq),
+                    posq.getElementSize(),
+                    device_pointer(cu_.getAtomIndexArray()),
+                    reinterpret_cast<std::uintptr_t>(positions.data_ptr<double>()),
+                    reinterpret_cast<std::uintptr_t>(slot_xyz.data_ptr<double>()),
+                    num_atoms,
+                    openmm_stream(cu_));
+            cudaStreamSynchronize(openmm_stream(cu_));
+        }
+        if (cu_.getUseDoublePrecision()) {
+            return positions;
+        }
+        return positions.to(torch::kFloat32);
+    }
+
+    torch::Tensor compute_forces() {
+        const int num_atoms = cu_.getNumAtoms();
+        const int padded_num_atoms = cu_.getPaddedNumAtoms();
+        torch::Tensor forces_fp64 = torch::empty(
+            {num_atoms, 3},
+            torch::TensorOptions().device(torch::kCUDA, cu_.getDeviceIndex()).dtype(torch::kFloat64)
+        );
 
         {
             ContextSelector selector(cu_);
             impl_->computeVirtualSites();
             impl_->calcForcesAndEnergy(true, false, groups_);
-            void* args[] = {
-                &cu_.getForce().getDevicePointer(),
-                &force_data,
-                &cu_.getAtomIndexArray().getDevicePointer(),
-                &num_atoms,
-                &padded_num_atoms,
-            };
-            cu_.executeKernel(read_forces_kernel_, args, num_atoms);
-            CHECK_CUDA_RESULT(cuCtxSynchronize(), cu_, "Failed to synchronize after reading forces");
+            openmm_cuda_bridge_read_forces(
+                    device_pointer(cu_.getForce()),
+                    reinterpret_cast<std::uintptr_t>(forces_fp64.data_ptr<double>()),
+                    device_pointer(cu_.getAtomIndexArray()),
+                    num_atoms,
+                    padded_num_atoms,
+                    openmm_stream(cu_));
+            cudaStreamSynchronize(openmm_stream(cu_));
         }
-        CHECK_CUDA_RESULT(cuCtxPushCurrent(primary_context_), cu_, "Failed to restore CUDA primary context");
-        CUcontext popped;
-        CHECK_CUDA_RESULT(cuCtxPopCurrent(&popped), cu_, "Failed to pop restored CUDA primary context");
-        return forces;
+        if (cu_.getUseDoublePrecision()) {
+            return forces_fp64;
+        }
+        return forces_fp64.to(torch::kFloat32);
     }
 
     torch::Tensor evaluate(torch::Tensor positions_angstrom) {
@@ -185,23 +269,26 @@ private:
         return tensor.to(torch::TensorOptions().device(torch::kCUDA, cu_.getDeviceIndex()).dtype(dtype)).contiguous();
     }
 
+    py::object context_object_;
     Context* context_;
     ContextImpl* impl_;
     CudaContext& cu_;
     int groups_;
-    CUcontext primary_context_;
-    CUmodule module_;
-    CUfunction write_positions_kernel_;
-    CUfunction read_forces_kernel_;
 };
 
 PYBIND11_MODULE(_openmm_cuda_bridge, m) {
     py::class_<CudaBridge>(m, "CudaBridge")
-        .def(py::init<std::uintptr_t, int>(), py::arg("context_ptr"), py::arg("groups") = 0xFFFFFFFF)
+        .def(
+            py::init([](py::object ctx, int groups_in) {
+                return new CudaBridge(std::move(ctx), groups_in);
+            }),
+            py::arg("context"),
+            py::arg("groups") = static_cast<int>(0xFFFFFFFF))
         .def("num_atoms", &CudaBridge::num_atoms)
         .def("padded_num_atoms", &CudaBridge::padded_num_atoms)
         .def("device_index", &CudaBridge::device_index)
         .def("set_positions", &CudaBridge::set_positions)
+        .def("get_positions_angstrom", &CudaBridge::get_positions_angstrom)
         .def("compute_forces", &CudaBridge::compute_forces)
         .def("evaluate", &CudaBridge::evaluate);
 }

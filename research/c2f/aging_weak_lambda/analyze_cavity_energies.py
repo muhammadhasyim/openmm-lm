@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from config import FIGURES_DIR, LAMBDAS, N_REPLICAS, RESULTS_DIR, SWITCH_TIME_PS, job_dir_path, run_prefix
+from paper_style import apply_paper_style, save_figure, style_axes
 
 
 def _load_csv(job_dir: Path, lam: float, replica: int) -> dict[str, np.ndarray]:
@@ -23,6 +24,7 @@ def _load_csv(job_dir: Path, lam: float, replica: int) -> dict[str, np.ndarray]:
 
 
 def main() -> None:
+    apply_paper_style()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=FIGURES_DIR)
     parser.add_argument("--results-dir", type=Path, default=RESULTS_DIR)
@@ -81,10 +83,11 @@ def main() -> None:
         ax.axvline(SWITCH_TIME_PS, color="k", ls="--", lw=1.0, alpha=0.7)
         ax.set_ylabel(ylab)
         ax.legend(fontsize=7, ncol=2)
+        style_axes(ax)
     axes[0].set_title("Bilinear coupling and DSE after step turn-on")
     axes[1].set_xlabel("time (ps)")
     fig.tight_layout()
-    fig.savefig(args.output_dir / "cavity_energies_vs_time.png", dpi=150)
+    save_figure(fig, args.output_dir / "cavity_energies_vs_time")
     plt.close(fig)
 
     args.results_dir.mkdir(parents=True, exist_ok=True)

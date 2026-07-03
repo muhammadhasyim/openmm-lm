@@ -1,6 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List, Dict, Callable
+from typing import Any, Optional, List, Dict, Callable, Tuple
 import math
+
+
+def _variant_stop(stop_time_ps: Optional[float]) -> float:
+    return -1.0 if stop_time_ps is None else float(stop_time_ps)
 
 
 class CouplingVariant(ABC):
@@ -20,6 +24,12 @@ class CouplingVariant(ABC):
     @abstractmethod
     def target_value(self) -> float:
         ...
+
+    def to_modulation_params(self) -> Tuple[Any, Tuple[float, ...]]:
+        """Return (modulation_enum, args) for CavityForce.setCouplingModulation."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support GPU setCouplingModulation"
+        )
 
 
 class ConstantVariant(CouplingVariant):
@@ -89,6 +99,33 @@ class StepVariant(CouplingVariant):
     @property
     def target_value(self) -> float:
         return self._target
+
+    def to_modulation_params(self) -> Tuple[Any, Tuple[float, ...]]:
+        import openmm
+
+        if self.decay_time_constant_ps is not None:
+            return (
+                openmm.CavityForce.ModulationDecayingStep,
+                (
+                    self._target,
+                    0.0,
+                    0.5,
+                    self.switch_time_ps,
+                    _variant_stop(self.turn_off_time_ps),
+                    self.decay_time_constant_ps,
+                ),
+            )
+        return (
+            openmm.CavityForce.ModulationStep,
+            (
+                self._target,
+                0.0,
+                0.5,
+                self.switch_time_ps,
+                _variant_stop(self.turn_off_time_ps),
+                1.0,
+            ),
+        )
 
 
 class SquareWaveVariant(CouplingVariant):
@@ -161,6 +198,21 @@ class SquareWaveVariant(CouplingVariant):
     @property
     def current_period(self) -> int:
         return 0  # updated externally if needed
+
+    def to_modulation_params(self) -> Tuple[Any, Tuple[float, ...]]:
+        import openmm
+
+        return (
+            openmm.CavityForce.ModulationSquareWave,
+            (
+                self._amplitude,
+                self.period_ps,
+                self.duty_cycle,
+                self.start_time_ps,
+                _variant_stop(self.stop_time_ps),
+                1.0,
+            ),
+        )
 
 
 class AdaptiveSquareWaveVariant(CouplingVariant):

@@ -58,10 +58,13 @@ class CudaBridge:
     """Python wrapper that accepts a normal OpenMM ``Context`` object."""
 
     context: Any
-    groups: int = 0xFFFFFFFF
+    groups: int = -1
 
     def __post_init__(self) -> None:
-        self._bridge = _CudaBridge(_context_pointer(self.context), int(self.groups))
+        groups = int(self.groups)
+        if groups > 0x7FFFFFFF:
+            groups -= 0x100000000
+        self._bridge = _CudaBridge(self.context, groups)
 
     @property
     def num_atoms(self) -> int:
@@ -77,6 +80,9 @@ class CudaBridge:
 
     def set_positions(self, positions_angstrom):
         self._bridge.set_positions(positions_angstrom)
+
+    def get_positions_angstrom(self):
+        return self._bridge.get_positions_angstrom()
 
     def compute_forces(self):
         return self._bridge.compute_forces()

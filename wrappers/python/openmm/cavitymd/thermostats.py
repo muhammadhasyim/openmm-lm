@@ -88,14 +88,20 @@ class DualThermostat:
         molecular_indices: List[int],
         temperature_K: float,
         tau_ps: float = 1.0,
+        random_number_seed: int | None = None,
     ) -> None:
         """Add BussiThermostat to a System for molecular particles only.
 
         Must be called before Context creation.
+
+        *random_number_seed* must match the integrator seed when using
+        ``CustomIntegrator`` on CUDA (use the simulation replica seed).
         """
         import openmm
 
         bussi = openmm.BussiThermostat(temperature_K, tau_ps)
+        if random_number_seed is not None and random_number_seed != 0:
+            bussi.setRandomNumberSeed(random_number_seed)
         bussi.setApplyToAllParticles(False)
         bussi.setSubtractCMMotion(True)  # DOF = 3N-3, matches cav-hoomd
         for idx in molecular_indices:

@@ -4827,6 +4827,7 @@ double CommonCalcCavityForceKernel::execute(ContextImpl& context, bool includeFo
 }
 
 void CommonCalcCavityForceKernel::copyParametersToContext(ContextImpl& context, const CavityForce& force) {
+    ContextSelector selector(cc);
     cavityParticleIndex = force.getCavityParticleIndex();
     omegac = force.getOmegac();
     lambdaCoupling = force.getLambdaCoupling();
@@ -5244,6 +5245,7 @@ double CommonCalcMultiModeCavityForceKernel::execute(ContextImpl& context, bool 
 }
 
 void CommonCalcMultiModeCavityForceKernel::copyParametersToContext(ContextImpl& context, const MultiModeCavityForce& force) {
+    ContextSelector selector(cc);
     omega1 = force.getOmega1();
     lambda1 = force.getLambda1();
     photonMass = force.getPhotonMass();

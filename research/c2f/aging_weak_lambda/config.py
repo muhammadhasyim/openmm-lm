@@ -78,6 +78,10 @@ BASE_SEED = 42
 
 # Per-molecule λ at N=250 (reference). Use scale_lambda(lam, N) when N ≠ 250.
 LAMBDAS: list[float] = [0.0, 0.01, 0.016667, 0.023333, 0.03]
+# Analysis/figures: exclude λ=0.03 until the N=1000 campaign completes (partial
+# ensemble gives noisy τ_s and unstable MTTI curves).
+ANALYSIS_LAMBDAS: list[float] = [0.0, 0.01, 0.016667, 0.023333]
+FIG3_SHOWCASE_LAMBDA = 0.016667
 LAMBDA_G_AT_N250: dict[float, float] = {
     lam: collective_coupling_g(lam, REFERENCE_NUM_MOL) for lam in LAMBDAS
 }
@@ -123,6 +127,7 @@ RELAXATION_TIMES_VS_T = _resolve_cav_hoomd_file("relaxation_times_vs_temperature
 
 FIGURES_DIR = CAMPAIGN_DIR / "figures"
 RESULTS_DIR = CAMPAIGN_DIR / "results"
+MASTER_FKT_DIR = CAMPAIGN_DIR / "master_fkt"
 
 
 def lambda_tag(lam: float) -> str:

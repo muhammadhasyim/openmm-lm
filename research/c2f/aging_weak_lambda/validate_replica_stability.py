@@ -28,14 +28,16 @@ def check_replica(
     *,
     runtime_ps: float,
     t_kin_max_k: float,
+    campaign_root: Path | None = None,
 ) -> list[str]:
     """Return list of failure messages (empty if OK)."""
-    prefix = job_dir_path(lam) / run_prefix(lam, replica)
+    job_dir = job_dir_path(lam, campaign_root=campaign_root)
+    prefix = job_dir / run_prefix(lam, replica)
     csv_path = energies_csv_path(prefix)
     failures: list[str] = []
 
-    if not replica_complete(job_dir_path(lam), lam, replica, runtime_ps):
-        failures.append(f"incomplete trajectory (missing CSV/FKT or short runtime)")
+    if not replica_complete(job_dir, lam, replica, runtime_ps):
+        failures.append("incomplete trajectory (missing CSV/FKT or short runtime)")
         return failures
 
     try:
@@ -69,8 +71,15 @@ def main() -> None:
     parser.add_argument("--replica-end", type=int, default=min(9, N_REPLICAS - 1))
     parser.add_argument("--runtime-ps", type=float, default=RUNTIME_PS)
     parser.add_argument("--t-kin-max-k", type=float, default=STABILITY_T_KIN_MAX_K)
+    parser.add_argument(
+        "--campaign-dir",
+        type=Path,
+        default=None,
+        help="Validation output root (default: aging_weak_lambda/)",
+    )
     args = parser.parse_args()
 
+    campaign_root = args.campaign_dir
     failed = 0
     for lam in args.lambdas:
         for replica in range(args.replica_start, args.replica_end + 1):
@@ -79,6 +88,7 @@ def main() -> None:
                 replica,
                 runtime_ps=args.runtime_ps,
                 t_kin_max_k=args.t_kin_max_k,
+                campaign_root=campaign_root,
             )
             if issues:
                 failed += 1

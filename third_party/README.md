@@ -7,6 +7,10 @@ Upstream [OpenMM](https://github.com/openmm/openmm) vendors C/C++ libraries unde
 | Path | Purpose |
 |------|---------|
 | `openmm-ml/` | Editable `openmmml` Python package (`pixi install -e ml`) |
+| `openmmforcefields/` | Amber/CHARMM biomolecular XML (`pixi run -e ff-classical install-ff-classical`) |
+| `cace/` | CACE source pin for LES-BEC cavity models |
+| `aimnet2/` | AIMNet2 reference implementation |
+| `mace/` | MACE / MACE-POLAR reference |
 | `cav-hoomd/` | HOOMD reference parity and calibration tables |
 | `i-pi/` | Ring-polymer MD parity (UMA ice RPMD tests) |
 | `LES-BEC/` | CACE water model checkpoint for ML+cavity tests |

@@ -1,16 +1,37 @@
 """Feedback controllers for C2F cavity-MD (ported from cav-hoomd)."""
 
+from enum import Enum
 from typing import Optional
 import numpy as np
 
 
+class TemperatureSignal(str, Enum):
+    """Temperature observable for feedback controllers."""
+
+    KINETIC = "kinetic"
+    HARMONIC = "harmonic"
+    STRUCTURAL = "structural"
+
+
+_ALIAS_TO_SIGNAL = {
+    "kinetic": TemperatureSignal.KINETIC,
+    "harmonic_equipartition": TemperatureSignal.HARMONIC,
+    "harmonic": TemperatureSignal.HARMONIC,
+    "harmonic_fictive": TemperatureSignal.HARMONIC,
+    "lj_coulombic": TemperatureSignal.STRUCTURAL,
+    "structural": TemperatureSignal.STRUCTURAL,
+    "structural_fictive": TemperatureSignal.STRUCTURAL,
+}
+
+
 def _measure_temperature(temperature_tracker, method: str) -> Optional[float]:
     """Read a temperature signal from TemperatureTracker."""
-    if method == "kinetic":
+    signal = _ALIAS_TO_SIGNAL.get(method)
+    if signal is TemperatureSignal.KINETIC:
         return temperature_tracker.kinetic_temperature
-    if method in ("harmonic_equipartition", "harmonic", "harmonic_fictive"):
+    if signal is TemperatureSignal.HARMONIC:
         return temperature_tracker.harmonic_equipartition_temperature
-    if method in ("lj_coulombic", "structural", "structural_fictive"):
+    if signal is TemperatureSignal.STRUCTURAL:
         return temperature_tracker.structural_fictive_temperature
     return None
 

@@ -187,6 +187,68 @@ class EmpiricalTemperatureData:
 
         return 0.0
 
+    def _invert_harmonic_array(
+        self, energy: np.ndarray, num_particles: Optional[int]
+    ) -> np.ndarray:
+        """Vectorized harmonic inversion using the fitted extended model."""
+        if self.use_direct_harmonic:
+            if num_particles is None:
+                raise ValueError("num_particles required for direct harmonic calculation")
+            out = np.zeros_like(energy, dtype=float)
+            mask = energy > 0.0
+            out[mask] = 4.0 * energy[mask] / (num_particles * Units.KB_HARTREE_PER_K)
+            return out
+
+        a = self.extended_harmonic_fit["a"]
+        b = self.extended_harmonic_fit["b"]
+        out = np.zeros_like(energy, dtype=float)
+        denom = a - b * energy
+        mask = (energy > 0.0) & (denom > 0.0)
+        out[mask] = energy[mask] / denom[mask]
+        return np.maximum(out, 0.0)
+
+    def _invert_t35_array(self, energy: np.ndarray) -> np.ndarray:
+        """Vectorized Rosenfeld-Tarazona inversion (closed form for fitted model)."""
+        e0 = self.extended_t35_fit["e0"]
+        a = self.extended_t35_fit["a"]
+        c = self.extended_t35_fit["c"]
+        out = np.zeros_like(energy, dtype=float)
+        delta = energy - e0
+        mask = delta > 0.0
+        denom = a - c * delta[mask]
+        valid = denom > 0.0
+        idx = np.where(mask)[0][valid]
+        u = delta[mask][valid] / denom[valid]
+        out[idx] = np.power(np.maximum(u, 0.0), 5.0 / 3.0)
+        return np.maximum(out, 0.0)
+
+    def calculate_temperature_array(
+        self, energy_hartree: np.ndarray, num_particles: Optional[int] = None
+    ) -> np.ndarray:
+        """Vectorized energy -> temperature inversion using the fitted model."""
+        energy = np.asarray(energy_hartree, dtype=float)
+        if energy.size == 0:
+            return np.array([], dtype=float)
+
+        if self.use_direct_harmonic and self.energy_component == "harmonic":
+            return self._invert_harmonic_array(energy, num_particles)
+
+        if self.has_extended_harmonic_fit and self.energy_component == "harmonic":
+            return self._invert_harmonic_array(energy, num_particles)
+
+        if self.has_extended_t35_fit and self.energy_component != "harmonic":
+            return self._invert_t35_array(energy)
+
+        if self.temperatures is not None and self.energies is not None:
+            order = np.argsort(self.energies)
+            e_sorted = self.energies[order]
+            t_sorted = self.temperatures[order]
+            e_lo, e_hi = float(e_sorted[0]), float(e_sorted[-1])
+            e_clip = np.clip(energy, e_lo, e_hi)
+            return np.maximum(np.interp(e_clip, e_sorted, t_sorted), 0.0)
+
+        return np.zeros_like(energy)
+
     @staticmethod
     def direct_harmonic_temperature(energy_hartree: float, num_particles: int) -> float:
         """T_v = 4*V_bond / (N * k_B) — no calibration data needed."""

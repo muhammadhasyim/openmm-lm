@@ -4,7 +4,7 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 C2F="$ROOT/research/c2f"
 OUT="$C2F/calibration_output"
 PYTHON="$ROOT/.pixi/envs/test/bin/python"

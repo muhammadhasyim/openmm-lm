@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 from .constants import Units
+from .correlated_stats import CorrelatedSummary, summarize_correlated
 from .empirical import EmpiricalTemperatureData
 from .simulation import assign_force_groups
 from .trackers import compute_harmonic_bond_energy_kjmol
@@ -29,6 +31,16 @@ SLIM_HEADER = "temperature  harmonic_hartree  lj_hartree  coulombic_hartree"
 
 
 @dataclass
+class CalibrationRunSpec:
+    """Per-temperature runtime overrides (picoseconds)."""
+
+    temperature_K: float
+    equil_ps: float
+    prod_ps: float
+    n_samples: int = 1000
+
+
+@dataclass
 class CalibrationRow:
     temperature_K: float
     avg_temperature_K: float
@@ -41,6 +53,10 @@ class CalibrationRow:
     lj_std_hartree: float
     coulombic_hartree: float = 0.0
     coulombic_std_hartree: float = 0.0
+    harmonic_n_eff: float = 0.0
+    lj_n_eff: float = 0.0
+    harmonic_block_size: int = 1
+    lj_block_size: int = 1
 
     @property
     def intramolecular_hartree(self) -> float:
@@ -65,7 +81,7 @@ def _select_platform(platform_name: Optional[str] = None):
             platform = openmm.Platform.getPlatformByName(candidate)
             print(f"Using OpenMM platform: {platform.getName()} (auto)")
             return platform
-        except Exception:
+        except openmm.OpenMMException:
             continue
 
     raise RuntimeError("No usable OpenMM platform found (tried CUDA, CPU, Reference)")
@@ -154,6 +170,7 @@ def write_full_calibration_file(
     with path.open("w") as f:
         f.write("# Potential energy component calibration for fictive temperatures\n")
         f.write("# NVT equilibration + production; energies averaged over production samples\n")
+        f.write("# *_std_hartree columns are reblocked SEM (Flyvbjerg/pyblock), not naive std\n")
         f.write("# Units: Hartree. intramolecular == harmonic bond energy (mKA diatomics).\n")
         f.write("# lj_hartree holds combined LJ+Coulomb (OpenMM NonbondedForce+PME).\n")
         f.write("#\n")
@@ -254,6 +271,68 @@ def crosscheck_calibration_against_reference(
     return True
 
 
+def load_calibration_manifest(manifest_path: Union[str, Path]) -> List[CalibrationRunSpec]:
+    """Load per-temperature run specs from plan_fictive_calibration JSON."""
+    path = Path(manifest_path)
+    payload = json.loads(path.read_text())
+    entries = payload.get("entries", payload)
+    specs: List[CalibrationRunSpec] = []
+    for entry in entries:
+        specs.append(
+            CalibrationRunSpec(
+                temperature_K=float(entry["temperature_K"]),
+                equil_ps=float(entry["equil_ps"]),
+                prod_ps=float(entry["prod_ps"]),
+                n_samples=int(entry.get("n_samples", 1000)),
+            )
+        )
+    return specs
+
+
+def write_n_eff_report(
+    diagnostics: Sequence[Dict],
+    output_file: Union[str, Path],
+) -> None:
+    path = Path(output_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"entries": list(diagnostics)}, indent=2) + "\n")
+
+
+def _summarize_component(samples: Sequence[float]) -> CorrelatedSummary:
+    return summarize_correlated(np.asarray(samples, dtype=float))
+
+
+def _check_n_eff_gates(
+    temperature_K: float,
+    harmonic: CorrelatedSummary,
+    lj: CorrelatedSummary,
+    *,
+    warn_threshold: float = 10.0,
+    fail_threshold: float = 5.0,
+) -> bool:
+    ok = True
+    for label, summary in (("harmonic", harmonic), ("lj", lj)):
+        if summary.n_eff < warn_threshold:
+            print(
+                f"  WARNING: T={temperature_K:.1f} K {label} N_eff={summary.n_eff:.1f} "
+                f"(target >= {warn_threshold:.0f})"
+            )
+        if summary.n_eff < fail_threshold:
+            print(
+                f"  FAIL: T={temperature_K:.1f} K {label} N_eff={summary.n_eff:.1f} "
+                f"(minimum {fail_threshold:.0f})"
+            )
+            ok = False
+        if summary.sem > 0 and summary.sem_pymbar > 0:
+            ratio = abs(summary.sem - summary.sem_pymbar) / summary.sem
+            if ratio > 2.0:
+                print(
+                    f"  WARNING: T={temperature_K:.1f} K {label} pyblock/pymbar SEM "
+                    f"disagree by factor {ratio:.1f}"
+                )
+    return ok
+
+
 def run_nvt_energy_calibration(
     system_template_fn: Callable[[float], Tuple],
     temperatures_K: Sequence[float],
@@ -261,6 +340,7 @@ def run_nvt_energy_calibration(
     prod_ns: float = 100.0,
     equil_ns: float = 10.0,
     n_samples: int = 1000,
+    run_specs: Optional[Sequence[CalibrationRunSpec]] = None,
     dt_ps: float = 0.001,
     output_file: Union[str, Path] = "potential_energy_components_vs_temperature.txt",
     slim_output_file: Optional[Union[str, Path]] = None,
@@ -268,6 +348,7 @@ def run_nvt_energy_calibration(
     platform_name: Optional[str] = None,
     minimize_steps: int = 100,
     timeseries_dir: Optional[Union[str, Path]] = None,
+    n_eff_report_file: Optional[Union[str, Path]] = None,
     resume: bool = False,
     bussi_tau_ps: float = BUSSI_TAU_PS,
 ) -> Path:
@@ -280,23 +361,41 @@ def run_nvt_energy_calibration(
     temperatures_K : sequence of float
         Bath temperatures to simulate (K).
     prod_ns : float
-        Production duration (nanoseconds).
+        Default production duration (nanoseconds) when ``run_specs`` is absent.
     equil_ns : float
-        Equilibration duration before production (nanoseconds).
+        Default equilibration duration (nanoseconds).
     n_samples : int
-        Number of evenly spaced energy samples during production.
+        Default number of evenly spaced energy samples during production.
+    run_specs : sequence of CalibrationRunSpec, optional
+        Per-temperature overrides (from ``plan_fictive_calibration`` manifest).
     """
     import openmm
     from openmm import unit
 
     output_path = Path(output_file)
     existing_rows: List[CalibrationRow] = []
+    existing_diagnostics: List[Dict] = []
+
+    if n_eff_report_file is not None and Path(n_eff_report_file).exists():
+        try:
+            existing_diagnostics = json.loads(
+                Path(n_eff_report_file).read_text()
+            ).get("entries", [])
+        except json.JSONDecodeError:
+            existing_diagnostics = []
+
+    if run_specs is not None:
+        spec_by_T = {round(s.temperature_K, 6): s for s in run_specs}
+        temperatures = [s.temperature_K for s in run_specs]
+    else:
+        spec_by_T = {}
+        temperatures = list(temperatures_K)
 
     if resume and write_full_output and output_path.exists():
         completed = load_completed_temperatures(output_path)
         if completed:
             print(f"Resume: skipping {len(completed)} temperatures already in {output_path}")
-        temperatures = [T for T in temperatures_K if T not in completed]
+        temperatures = [T for T in temperatures if T not in completed]
         with output_path.open() as f:
             for line in f:
                 line = line.strip()
@@ -320,27 +419,42 @@ def run_nvt_energy_calibration(
                         coulombic_std_hartree=float(parts[13]),
                     )
                 )
-    else:
-        temperatures = list(temperatures_K)
-
-    prod_ps = prod_ns * 1000.0
-    equil_ps = equil_ns * 1000.0
-    prod_steps = max(1, int(prod_ps / dt_ps))
-    equil_steps = max(0, int(equil_ps / dt_ps))
-    sample_interval = max(1, prod_steps // max(1, n_samples))
+        existing_diagnostics = [
+            d for d in existing_diagnostics
+            if any(abs(d["temperature_K"] - t) < 0.05 for t in completed)
+        ]
 
     if timeseries_dir is not None:
         Path(timeseries_dir).mkdir(parents=True, exist_ok=True)
 
     print("\n=== NVT energy calibration ===")
-    print(f"  Production: {prod_ns} ns ({prod_steps} steps), equil: {equil_ns} ns")
-    print(f"  Samples: {n_samples} (interval {sample_interval * dt_ps:.3f} ps)")
     print(f"  Temperatures remaining: {len(temperatures)}")
 
     new_rows: List[CalibrationRow] = []
+    new_diagnostics: List[Dict] = []
 
     for T in temperatures:
+        spec = spec_by_T.get(round(float(T), 6))
+        if spec is not None:
+            equil_ps = spec.equil_ps
+            prod_ps = spec.prod_ps
+            n_samples_T = spec.n_samples
+        else:
+            equil_ps = equil_ns * 1000.0
+            prod_ps = prod_ns * 1000.0
+            n_samples_T = n_samples
+
+        prod_steps = max(1, int(prod_ps / dt_ps))
+        equil_steps = max(0, int(equil_ps / dt_ps))
+        sample_interval = max(1, prod_steps // max(1, n_samples_T))
+
         print(f"\n--- T = {T:.2f} K ---")
+        print(
+            f"  Production: {prod_ps / 1000.0:.4f} ns ({prod_steps} steps), "
+            f"equil: {equil_ps / 1000.0:.4f} ns"
+        )
+        print(f"  Samples: {n_samples_T} (interval {sample_interval * dt_ps:.3f} ps)")
+
         system, positions, n_atoms = system_template_fn(T)
 
         bussi = openmm.BussiThermostat(T, bussi_tau_ps)
@@ -360,13 +474,13 @@ def run_nvt_energy_calibration(
             integrator.step(equil_steps)
             print(f"  Equilibrated {equil_ps:.1f} ps ({equil_steps} steps)")
 
-        harmonic_samples = []
-        total_samples = []
-        lj_samples = []
-        coulomb_samples = []
-        temp_samples = []
+        harmonic_samples: List[float] = []
+        total_samples: List[float] = []
+        lj_samples: List[float] = []
+        coulomb_samples: List[float] = []
+        temp_samples: List[float] = []
 
-        for sample_idx in range(n_samples):
+        for _ in range(n_samples_T):
             integrator.step(sample_interval)
             e_h, e_tot, e_lj, e_c = _sample_energy_snapshot(context, system)
             harmonic_samples.append(e_h)
@@ -383,7 +497,7 @@ def run_nvt_energy_calibration(
                     "intramolecular_hartree,lj_hartree,coulombic_hartree,T_kinetic_K\n"
                 )
                 t0 = equil_ps
-                for i in range(n_samples):
+                for i in range(n_samples_T):
                     t_ps = t0 + (i + 1) * sample_interval * dt_ps
                     tf.write(
                         f"{i},{t_ps:.6f},{harmonic_samples[i]:.10f},{total_samples[i]:.10f},"
@@ -391,25 +505,46 @@ def run_nvt_energy_calibration(
                         f"{coulomb_samples[i]:.10f},{temp_samples[i]:.6f}\n"
                     )
 
+        total_summary = _summarize_component(total_samples)
+        harmonic_summary = _summarize_component(harmonic_samples)
+        lj_summary = _summarize_component(lj_samples)
+        coulomb_summary = _summarize_component(coulomb_samples)
+
+        _check_n_eff_gates(float(T), harmonic_summary, lj_summary)
+
         row = CalibrationRow(
             temperature_K=float(T),
             avg_temperature_K=float(np.mean(temp_samples)),
-            n_samples=n_samples,
-            total_PE_hartree=float(np.mean(total_samples)),
-            total_PE_std_hartree=float(np.std(total_samples)),
-            harmonic_hartree=float(np.mean(harmonic_samples)),
-            harmonic_std_hartree=float(np.std(harmonic_samples)),
-            lj_hartree=float(np.mean(lj_samples)),
-            lj_std_hartree=float(np.std(lj_samples)),
-            coulombic_hartree=float(np.mean(coulomb_samples)),
-            coulombic_std_hartree=float(np.std(coulomb_samples)),
+            n_samples=n_samples_T,
+            total_PE_hartree=total_summary.mean,
+            total_PE_std_hartree=total_summary.sem,
+            harmonic_hartree=harmonic_summary.mean,
+            harmonic_std_hartree=harmonic_summary.sem,
+            lj_hartree=lj_summary.mean,
+            lj_std_hartree=lj_summary.sem,
+            coulombic_hartree=coulomb_summary.mean,
+            coulombic_std_hartree=coulomb_summary.sem,
+            harmonic_n_eff=harmonic_summary.n_eff,
+            lj_n_eff=lj_summary.n_eff,
+            harmonic_block_size=harmonic_summary.block_size,
+            lj_block_size=lj_summary.block_size,
         )
         new_rows.append(row)
-        print(
-            f"  <V_bond> = {row.harmonic_hartree:.6f} ± {row.harmonic_std_hartree:.6f} Ha"
+        new_diagnostics.append(
+            {
+                "temperature_K": float(T),
+                "harmonic": asdict(harmonic_summary),
+                "lj": asdict(lj_summary),
+                "total_PE": asdict(total_summary),
+            }
         )
         print(
-            f"  <V_LJ+C> = {row.lj_hartree:.6f} ± {row.lj_std_hartree:.6f} Ha"
+            f"  <V_bond> = {row.harmonic_hartree:.6f} ± {row.harmonic_std_hartree:.6f} Ha "
+            f"(N_eff={harmonic_summary.n_eff:.1f}, block={harmonic_summary.block_size})"
+        )
+        print(
+            f"  <V_LJ+C> = {row.lj_hartree:.6f} ± {row.lj_std_hartree:.6f} Ha "
+            f"(N_eff={lj_summary.n_eff:.1f}, block={lj_summary.block_size})"
         )
         print(f"  <T_kin>  = {row.avg_temperature_K:.1f} K (target {T:.1f} K)")
 
@@ -420,6 +555,8 @@ def run_nvt_energy_calibration(
             write_full_calibration_file(all_rows, output_path)
         if slim_output_file is not None:
             write_slim_calibration_file(all_rows, slim_output_file)
+        if n_eff_report_file is not None:
+            write_n_eff_report(existing_diagnostics + new_diagnostics, n_eff_report_file)
 
     all_rows = existing_rows + new_rows
     if not all_rows:
@@ -430,12 +567,16 @@ def run_nvt_energy_calibration(
         write_full_calibration_file(all_rows, output_path)
     if slim_output_file is not None:
         write_slim_calibration_file(all_rows, slim_output_file)
+    if n_eff_report_file is not None and (existing_diagnostics or new_diagnostics):
+        write_n_eff_report(existing_diagnostics + new_diagnostics, n_eff_report_file)
 
     check_calibration_sanity(all_rows)
     result_path = output_path if write_full_output else Path(slim_output_file)
     print(f"\nCalibration written to {result_path}")
     if slim_output_file and write_full_output:
         print(f"Slim calibration written to {slim_output_file}")
+    if n_eff_report_file is not None:
+        print(f"N_eff diagnostics written to {n_eff_report_file}")
 
     return result_path
 

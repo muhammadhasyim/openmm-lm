@@ -109,6 +109,7 @@ def _run_one(
         cmd.append("--adaptive")
         cmd.extend(["--dt-max-ps", str(dt_max_ps)])
     else:
+        cmd.append("--no-adaptive")
         cmd.extend(["--dt-ps", str(dt_ps)])
     if no_resume:
         cmd.append("--no-resume")

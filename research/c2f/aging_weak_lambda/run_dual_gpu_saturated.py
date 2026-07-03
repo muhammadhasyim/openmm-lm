@@ -151,6 +151,8 @@ def run_single(
         cmd = list(base_cmd)
         if use_adaptive:
             cmd.append("--adaptive")
+        else:
+            cmd.append("--no-adaptive")
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "w", encoding="utf-8") as fh:
             fh.write(f"# start {_utcnow()} gpu={gpu} lam={lam:g} rep={replica}\n")

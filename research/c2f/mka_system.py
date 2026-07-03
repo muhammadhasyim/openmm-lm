@@ -51,6 +51,20 @@ RCUT_AU = 15.0
 
 BUSSI_TAU_PS = 1.0
 _PLATFORM_PREFERENCE = ("CUDA", "CPU", "Reference")
+_GPU_PLATFORMS = frozenset({"CUDA", "OpenCL"})
+_DEFAULT_GPU_PRECISION = "mixed"
+
+
+def _configure_platform_precision(platform) -> None:
+    """Set GPU precision (mixed default) so adaptive dt stays numerically stable."""
+    if platform.getName() not in _GPU_PLATFORMS:
+        return
+    precision = os.environ.get("OPENMM_PRECISION", _DEFAULT_GPU_PRECISION)
+    try:
+        platform.setPropertyDefaultValue("Precision", precision)
+    except Exception:
+        return
+    print(f"  CUDA/OpenCL precision: {precision}")
 
 
 def _select_platform(platform_name=None):
@@ -59,12 +73,14 @@ def _select_platform(platform_name=None):
     if name:
         platform = openmm.Platform.getPlatformByName(name)
         print(f"Using OpenMM platform: {platform.getName()}")
+        _configure_platform_precision(platform)
         return platform
 
     for candidate in _PLATFORM_PREFERENCE:
         try:
             platform = openmm.Platform.getPlatformByName(candidate)
             print(f"Using OpenMM platform: {platform.getName()} (auto)")
+            _configure_platform_precision(platform)
             return platform
         except Exception:
             continue

@@ -47,8 +47,8 @@ TAU_RAMP_PS = 50.0
 # Proven-stable fixed-dt cap (1.0 fs); adaptive must not exceed this.
 TARGET_DT_PS = 0.001
 DT_MAX_PS = 0.001
-DT_MIN_PS = 1e-6  # 1e-3 fs floor during stiff contacts
-DT_SHOCK_CAP_PS = 1e-6
+DT_MIN_PS = 1e-4  # 0.1 fs floor (safe for mixed/double integration)
+DT_SHOCK_CAP_PS = 1e-4
 COUPLING_CHANGE_THRESHOLD = 1e-5
 PRE_SWITCH_GUARD_PS = 5.0
 SWITCH_TIME_EPS_PS = 1e-9
@@ -153,11 +153,20 @@ def effective_dt_max_ps(
     return dt_max_ps
 
 
-def effective_force_update_interval(state: Dict[str, Any], time_ps: float) -> int:
-    """Return 1 during post-shock recovery, else ``FORCE_UPDATE_INTERVAL``."""
+def effective_force_update_interval(
+    state: Dict[str, Any],
+    time_ps: float,
+    *,
+    current_dt_ps: float | None = None,
+    dt_max_ps: float = DT_MAX_PS,
+) -> int:
+    """Return 1 during post-shock recovery or near-dt-floor, else interval."""
     ramp_t0 = state.get("ramp_t0")
     if ramp_t0 is not None and time_ps - float(ramp_t0) < TAU_RAMP_PS - 1e-15:
         return 1
+    if current_dt_ps is not None and current_dt_ps > 0.0:
+        if current_dt_ps <= 4.0 * DT_MIN_PS or current_dt_ps < 0.05 * dt_max_ps:
+            return 1
     return FORCE_UPDATE_INTERVAL
 
 
@@ -600,7 +609,12 @@ def advance_to_time_step_on(
         state["prev_lambda_on"] = curr_on
         state["last_lambda"] = curr_lambda
 
-        update_interval = effective_force_update_interval(state, time_ps)
+        update_interval = effective_force_update_interval(
+            state,
+            time_ps,
+            current_dt_ps=current_dt_ps,
+            dt_max_ps=dt_max_ps,
+        )
         steps_since = int(state.get("steps_since_dt_update", 0))
         if force_update or steps_since >= update_interval:
             current_dt_ps = _update_timestep_max_metric(

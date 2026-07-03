@@ -82,7 +82,13 @@ def main() -> None:
         "--no-adaptive",
         action="store_false",
         dest="adaptive",
-        help="Use fixed dt=1 fs Verlet instead of adaptive integrator",
+        help="Use fixed-dt Verlet instead of adaptive integrator",
+    )
+    parser.add_argument(
+        "--dt-ps",
+        type=float,
+        default=0.001,
+        help="Fixed integrator step size in ps (default 0.001 = 1.0 fs)",
     )
     parser.add_argument(
         "--campaign-dir",
@@ -174,6 +180,7 @@ def main() -> None:
         dipole_interval_ps=DIPOLE_INTERVAL_PS,
         num_molecules=args.num_molecules,
         adaptive=args.adaptive,
+        dt_ps=args.dt_ps,
         dt_max_ps=args.dt_max_ps,
         no_resume=args.no_resume,
     )

@@ -87,6 +87,7 @@ def _run_one(
     campaign_root: Path | None = None,
     ir_windows: list[tuple[float, float]] | None = None,
     dt_max_ps: float = DT_MAX_PS,
+    dt_ps: float = 0.001,
 ) -> dict:
     run_script = CAMPAIGN_DIR / "run_single.py"
     label = f"lam={lam:g} rep={replica}"
@@ -107,6 +108,8 @@ def _run_one(
     if adaptive and not retry_fixed_dt:
         cmd.append("--adaptive")
         cmd.extend(["--dt-max-ps", str(dt_max_ps)])
+    else:
+        cmd.extend(["--dt-ps", str(dt_ps)])
     if no_resume:
         cmd.append("--no-resume")
     if num_molecules != REFERENCE_NUM_MOL:
@@ -147,6 +150,7 @@ def _run_one(
             "max_force" if adaptive and not retry_fixed_dt else "fixed_dt"
         ),
         "dt_max_ps": dt_max_ps if adaptive and not retry_fixed_dt else None,
+        "dt_ps": dt_ps if not (adaptive and not retry_fixed_dt) else None,
     }
 
     if (
@@ -267,6 +271,12 @@ def main() -> None:
         default=DT_MAX_PS,
         help=f"Max adaptive step size in ps (default {DT_MAX_PS} = 1.0 fs)",
     )
+    parser.add_argument(
+        "--dt-ps",
+        type=float,
+        default=0.001,
+        help="Fixed integrator step size in ps when --no-adaptive (default 0.001 = 1.0 fs)",
+    )
     args = parser.parse_args()
 
     campaign_root = args.campaign_dir
@@ -329,6 +339,7 @@ def main() -> None:
         campaign_root=campaign_root,
         ir_windows=ir_windows,
         dt_max_ps=args.dt_max_ps,
+        dt_ps=args.dt_ps,
     )
 
     if args.jobs == 1:

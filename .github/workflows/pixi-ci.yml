@@ -19,9 +19,17 @@ jobs:
     name: Pixi linux-64 build + test
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check deprecated submodule paths
+        run: python3 scripts/check_deprecated_paths.py
+
+      - name: Check repository layout
+        run: python3 scripts/check_repo_layout.py
 
       - name: Install Pixi
-        uses: prefix-dev/setup-pixi@v0.9.14
+        uses: prefix-dev/setup-pixi@v0.9.6
         with:
           pixi-version: v0.69.0
           cache: true
@@ -41,6 +49,9 @@ jobs:
       - name: Python tests
         run: pixi run -e test test-py
 
+      - name: CavityMD smoke
+        run: pixi run -e test test-cavitymd-smoke
+
       - name: C++ tests
         run: pixi run -e test test-cpp
 
@@ -49,9 +60,17 @@ jobs:
     name: Pixi osx-arm64 build + smoke
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check deprecated submodule paths
+        run: python3 scripts/check_deprecated_paths.py
+
+      - name: Check repository layout
+        run: python3 scripts/check_repo_layout.py
 
       - name: Install Pixi
-        uses: prefix-dev/setup-pixi@v0.9.14
+        uses: prefix-dev/setup-pixi@v0.9.6
         with:
           pixi-version: v0.69.0
           cache: true
@@ -70,9 +89,17 @@ jobs:
     name: Pixi linux-64 CUDA smoke (GPU runner)
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Check deprecated submodule paths
+        run: python3 scripts/check_deprecated_paths.py
+
+      - name: Check repository layout
+        run: python3 scripts/check_repo_layout.py
 
       - name: Install Pixi
-        uses: prefix-dev/setup-pixi@v0.9.14
+        uses: prefix-dev/setup-pixi@v0.9.6
         with:
           pixi-version: v0.69.0
           cache: true

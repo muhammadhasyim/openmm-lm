@@ -51,7 +51,8 @@ This repository extends upstream OpenMM with **machine-learning potentials** (bu
 | ML runtime deps (FairChem, PyTorch) | `pixi install -e ml` or [requirements-ml.txt](requirements-ml.txt) |
 | Ice Ih RPMD benchmarks and LAMMPS / i-PI parity | [tests/uma_ice_rpmd/README.md](tests/uma_ice_rpmd/README.md) |
 | RPMD-focused tests | [tests/rpmd/README.md](tests/rpmd/README.md) |
-| Experimental ML architecture notes | [docs/ml-experimental/README.md](docs/ml-experimental/README.md) |
+| Architecture index (cavity, ML, RPMD, research) | [docs/openmm-lm/README.md](docs/openmm-lm/README.md) |
+| C2F protocol & aging campaigns | [research/c2f/](research/c2f/) |
 
 **Support for this fork:** use **this repository’s** issues and discussions for UMA/RPMD/`PythonForce` batching and build questions; use **upstream** OpenMM channels for general API questions (see [SUPPORT.md](SUPPORT.md)).
 

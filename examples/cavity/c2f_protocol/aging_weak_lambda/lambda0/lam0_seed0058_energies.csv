@@ -1,2 +1,0 @@
-time_ps,T_bath_K,T_kinetic_K,T_v_fictive_K,T_s_fictive_K,E_kinetic_kjmol,E_potential_kjmol,E_mech_kjmol,E_bond_kjmol,E_nonbonded_kjmol,E_cav_harmonic_kjmol,E_cav_coupling_kjmol,E_cav_dse_kjmol
-1.000000,100.0000,105.7338,90.8318,108.3467,652.457825,-3558.243579,-2905.785754,127.870008,-3687.700456,1.586637,0.000000,0.000000

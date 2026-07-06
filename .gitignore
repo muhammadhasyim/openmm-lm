@@ -46,7 +46,13 @@ tests/protein_system/protein_cavity_*.npz
 tests/protein_system/protein_cavity_*_metadata.json
 tests/protein_system/protein_cavity_*_stream.npy
 tests/protein_system/protein_ir_spectrum_*
-tests/protein_system/protein_cavity_*.pdb
+tests/protein_system/trajectory/
+tests/protein_system/vmd_frames/
+tests/protein_system/traj_lambda*/
+tests/protein_system/*.mp4
+tests/protein_system/*.tcl
+tests/protein_system/nohup.out
+tests/protein_system/output.out
 tests/cavity_ir_spectrum*
 tests/rabi_*
 tests/bond_vibration_test.png
@@ -65,11 +71,21 @@ examples/cavity/dimer_system/cavity_diamer_*.npz
 examples/cavity/dimer_system/*.log
 examples/cavity/dimer_system/force_component_*.png
 examples/cavity/dimer_system/force_component_summary.txt
+examples/cavity/protein_system/*.npz
+examples/cavity/protein_system/trajectory/
+examples/cavity/protein_system/movie_frames/
+examples/cavity/protein_system/*.mp4
+examples/cavity/protein_system/nohup.out
+examples/cavity/protein_system/output.out
+
+# Stale duplicate tree (removed from repo)
+ml-experimental/
 
 # Equilibrium/benchmark data and outputs (entire folder excluded from repo)
 equilibrium_fkt_100K/
 
 # Dev-only / reference (not for repo or release)
+third_party/cav-hoomd/
 cav-hoomd/
 arXiv-2505.08762v1/
 
@@ -81,6 +97,45 @@ ml-experimental.backup/
 
 # macOS
 .DS_Store
+
+# Lab / runtime artifacts
+nohup.out
+*.pid
+paper_2603.15693/
+
+# C2F research generated outputs (keep source + slurm scripts only)
+research/c2f/aging_weak_lambda/**/*.csv
+research/c2f/aging_weak_lambda/**/fkt_ref_*.txt
+research/c2f/aging_weak_lambda/**/campaign_*.jsonl
+research/c2f/aging_weak_lambda/pre_fkt_fix/
+research/c2f/aging_weak_lambda/benchmark_fkt/
+research/c2f/aging_weak_lambda/diagnose_fkt/
+research/c2f/aging_weak_lambda/aging_from_lam0/
+research/c2f/aging_weak_lambda/aging_weak_lambda/
+research/c2f/aging_weak_lambda/lambda*/
+research/c2f/aging_weak_lambda/results/
+research/c2f/aging_weak_lambda/slurm/logs/
+!research/c2f/aging_weak_lambda/slurm/logs/.gitkeep
+research/c2f/**/equilibrium_output/
+research/c2f/**/turnon_aging/
+research/c2f/**/stale_pre_ic_regen/
+research/c2f/**/fig5_output*/
+research/c2f/**/benchmark_output/
+research/c2f/**/calibration_output/
+research/c2f/**/diagnostics/
+research/c2f/**/*_meta.txt
+research/c2f/**/smoke_c2f*
+
+# Third-party git submodules (optional checkout)
+third_party/cav-hoomd/
+third_party/i-pi/
+third_party/openmm-ml/
+third_party/LES-BEC/
+
+# Deprecated root-level submodule paths (use third_party/)
+openmm-ml/
+i-pi/
+LES-BEC/
 
 # UMA ice RPMD workflow: generated runs (keep small fixtures under fixtures/golden/)
 tests/uma_ice_rpmd/pipeline_out/

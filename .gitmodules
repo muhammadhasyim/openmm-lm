@@ -1,13 +1,32 @@
 [submodule "cav-hoomd"]
-	path = cav-hoomd
+	path = third_party/cav-hoomd
 	url = https://github.com/muhammadhasyim/cav-hoomd.git
 [submodule "i-pi"]
-	path = i-pi
+	path = third_party/i-pi
 	url = https://github.com/i-pi/i-pi.git
 [submodule "openmm-ml"]
-	path = openmm-ml
+	path = third_party/openmm-ml
 	url = https://github.com/muhammadhasyim/openmm-ml
 
 [submodule "LES-BEC"]
-	path = LES-BEC
+	path = third_party/LES-BEC
 	url = https://github.com/BingqingCheng/LES-BEC.git
+
+[submodule "openmmforcefields"]
+	path = third_party/openmmforcefields
+	url = https://github.com/openmm/openmmforcefields.git
+
+[submodule "cace"]
+	path = third_party/cace
+	url = https://github.com/BingqingCheng/cace.git
+
+[submodule "aimnet2"]
+	path = third_party/aimnet2
+	url = https://github.com/isayevlab/AIMNet2.git
+
+[submodule "mace"]
+	path = third_party/mace
+	url = https://github.com/ACEsuit/mace.git
+[submodule "third_party/MBX"]
+	path = third_party/MBX
+	url = https://github.com/paesanilab/MBX

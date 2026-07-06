@@ -1,0 +1,32 @@
+{
+  "created_utc": "2026-06-18T04:35:00Z",
+  "campaign": "N10k_local_500_replicas",
+  "protocol": {
+    "num_molecules": 10000,
+    "equil_ps": 10000,
+    "equil_ns": 10.0,
+    "prod_switch_ps": 200,
+    "prod_runtime_ps": 2200,
+    "prod_aging_ps": 2000,
+    "prod_aging_ns": 2.0,
+    "lambda_ref_at_N250": 0.03,
+    "lambda_eff": 0.00474341649025444,
+    "collective_g": 0.474341649025444,
+    "temperature_K": 100,
+    "integrator_prod": "max_metric_adaptive",
+    "replicas": 500,
+    "replica_range": [0, 499]
+  },
+  "paths": {
+    "ic": "research/c2f/equilibrium_output/eq10ns100K_N10k_lam0_final_state.npz",
+    "campaign_dir": "research/c2f/aging_weak_lambda/N10k",
+    "launcher": "research/c2f/aging_weak_lambda/run_local_n10k_dual_gpu.sh",
+    "log_dir": "research/c2f/aging_weak_lambda/N10k/logs"
+  },
+  "gpu": {
+    "devices": [0, 1],
+    "max_concurrent_jobs": 6,
+    "job_mem_mib_estimate": 876,
+    "coexist_calibration": true
+  }
+}

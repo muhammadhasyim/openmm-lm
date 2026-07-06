@@ -33,18 +33,17 @@ You can also find:
 
 ### Cavity-Coupled MD Examples
 
-The `cavity/` directory contains examples of cavity-coupled molecular dynamics simulations:
-- `cavity/dimer_system/` - Simple two-component dimer system with cavity coupling
-- `cavity/water_system/` - Flexible TIP4P-Ew water with cavity coupling
-- `cavity/protein_system/` - Protein system data and examples
+The `cavity/` directory contains **short, reproducible demos** for cavity-coupled MD:
 
-These examples demonstrate:
-- Cavity-molecule coupling effects
-- IR spectrum analysis with MESA
-- Rabi splitting in molecular systems
-- Performance benchmarking
+- `cavity/dimer_system/` — two-component dimer with cavity coupling
+- `cavity/water_system/` — flexible TIP4P-Ew water
+- `cavity/protein_system/` — protein in explicit solvent (`run_simulation.py`)
 
-See the README files in each subdirectory for detailed usage instructions.
+Paper-scale C2F protocol code and SLURM campaigns live under [`research/c2f/`](../research/c2f/)
+(not in `examples/`). A redirect stub remains at `cavity/c2f_protocol/README.md`.
+
+These demos illustrate cavity–molecule coupling, IR spectra (MESA), and Rabi splitting.
+See each subdirectory README for usage.
 
 ### ML Potential Examples
 

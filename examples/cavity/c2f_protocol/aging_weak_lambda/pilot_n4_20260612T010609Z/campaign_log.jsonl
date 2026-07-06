@@ -1,4 +1,0 @@
-{"timestamp": "2026-06-12T01:06:04.348699Z", "lambda": 0.03, "replica": 2, "job_dir": "lambda0p03", "returncode": -9, "elapsed_s": 28.862775087356567}
-{"timestamp": "2026-06-12T01:06:04.381917Z", "lambda": 0.03, "replica": 1, "job_dir": "lambda0p03", "returncode": -9, "elapsed_s": 28.93080449104309}
-{"timestamp": "2026-06-12T01:06:04.413631Z", "lambda": 0.03, "replica": 3, "job_dir": "lambda0p03", "returncode": -9, "elapsed_s": 28.8810875415802}
-{"timestamp": "2026-06-12T01:06:04.447225Z", "lambda": 0.03, "replica": 0, "job_dir": "lambda0p03", "returncode": -9, "elapsed_s": 29.027403354644775}

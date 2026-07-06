@@ -9,7 +9,7 @@ tests/
 ├── dimer_system/      # Two-component toy model for cavity coupling
 ├── water_system/      # Flexible TIP4P-Ew water
 ├── rpmd/              # UMA/RPMD tests (see rpmd/README.md)
-├── protein_system/   # Protein cavity tests
+├── protein_system/   # Protein cavity unit tests (sim scripts in examples/cavity/protein_system/)
 ├── uma_ice_rpmd/     # Ice RPMD
 ├── _archive/         # Legacy outputs
 ├── docs/             # Fix history, technical notes (docs/fix-history.md)
@@ -29,12 +29,14 @@ The C++ unit tests (Test*.h, Test*.cpp) are compiled and run as part of the Open
 
 ## Simulation Scripts
 
-**Note:** Simulation scripts (run_simulation.py, analyze_spectrum.py, etc.) have been moved to `examples/cavity/` for clarity. This directory now contains only verification and unit tests.
+**Note:** Simulation scripts live in `examples/cavity/`. This directory contains verification tests and C++ unit tests.
 
-For actual simulation examples, see:
-- `examples/cavity/dimer_system/` - Dimer system simulations
-- `examples/cavity/water_system/` - Water system simulations
-- `examples/cavity/protein_system/` - Protein system data
+For simulation examples, see:
+- `examples/cavity/dimer_system/` — dimer simulations
+- `examples/cavity/water_system/` — water simulations
+- `examples/cavity/protein_system/` — protein `run_simulation.py` and analysis
+
+Paper-scale C2F workflows: `research/c2f/`.
 
 ## System Requirements
 

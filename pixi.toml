@@ -10,7 +10,8 @@ platforms = ["linux-64", "win-64", "osx-64", "osx-arm64"]
 preview = ["pixi-build"]
 
 [activation]
-env = { OPENMM_PLUGIN_DIR = "$CONDA_PREFIX/lib/plugins" }
+env = { OPENMM_PLUGIN_DIR = "$CONDA_PREFIX/lib/plugins", PYTHONPATH = "" }
+scripts = ["scripts/pixi_activate.sh"]
 
 [dependencies]
 openmm = { path = "." }
@@ -175,27 +176,43 @@ pytest-timeout = "*"
 scipy = "*"
 matplotlib = "*"
 pandas = "*"
+pip = "*"
+
+[feature.test.target.linux-64.dependencies]
+texlive-core = "*"
+ghostscript = "*"
+
+[feature.test.pypi-dependencies]
+pyblock = "*"
+pymbar = "*"
 
 [feature.test.tasks]
 smoke = "python -m openmm.testInstallation"
-fix-cuda = "bash scripts/rebuild_cuda_plugin.sh"
-test-py = "python -m pytest -v wrappers/python/tests/TestCavityMDControllers.py tests/rpmd/ openmm-ml/test/TestCavityMLIP.py --ignore=tests/rpmd/test_uma_hybrid_rpmd_cavity.py -x"
+fix-cuda = "bash scripts/install_cluster_nvrtc.sh"
+rebuild-cuda = "bash scripts/rebuild_cuda_plugin.sh"
+init-submodules = "bash scripts/init_submodules.sh"
+test-py = "python -m pytest -v wrappers/python/tests/TestCavityMDControllers.py wrappers/python/tests/TestCavityMDCoupling.py wrappers/python/tests/TestCavityMDForceFields.py tests/rpmd/ --ignore=tests/rpmd/test_uma_hybrid_rpmd_cavity.py -x"
+test-cavitymd-smoke = "python research/c2f/run_c2f.py --smoke --platform CPU --no-adaptive"
+check-submodule-paths = "python scripts/check_deprecated_paths.py"
+check-repo-layout = "python scripts/check_repo_layout.py"
 test-cpp = "bash scripts/build_and_test_cpp.sh"
-figure5 = "bash examples/cavity/c2f_protocol/run_figure5.sh"
-calibrate-fictive = "python examples/cavity/c2f_protocol/run_fictive_calibration.py"
-calibrate-fictive-quick = "python examples/cavity/c2f_protocol/run_fictive_calibration.py --quick"
+figure5 = "bash research/c2f/run_figure5.sh"
+calibrate-fictive = "python research/c2f/run_fictive_calibration.py"
+calibrate-fictive-quick = "python research/c2f/run_fictive_calibration.py --quick"
 
 [feature.ml.dependencies]
 python = ">=3.11,<3.14"
 pip = "*"
 
-[feature.ml.pypi-dependencies]
-openmmml = { path = "openmm-ml", editable = true }
+# openmmml is installed from third_party/openmm-ml via install-ml (not a path
+# pypi-dependency) so pixi can solve the test env without an initialized submodule.
 
 [feature.ml.tasks]
-install-ml = "pip install -e openmm-ml"
-smoke-ml = "python -c \"import openmmml; from openmmml import CavitySpec; print('openmmml OK')\""
-test-ml-cavity = "python -m pytest -q openmm-ml/test/TestCavityMLIP.py"
+init-submodules = "bash scripts/init_submodules.sh openmm-ml"
+install-ml = "bash scripts/init_submodules.sh openmm-ml && pip install -e third_party/openmm-ml"
+smoke-ml = { cmd = "python -c \"import openmmml; from openmmml import CavitySpec; print('openmmml OK')\"", depends-on = ["install-ml"] }
+test-ml-cavity = { cmd = "python -m pytest -q third_party/openmm-ml/test/TestCavityMLIP.py", depends-on = ["install-ml"] }
+test-py-ml = { cmd = "python -m pytest -v wrappers/python/tests/TestCavityMDControllers.py wrappers/python/tests/TestCavityMDCoupling.py tests/rpmd/ third_party/openmm-ml/test/TestCavityMLIP.py --ignore=tests/rpmd/test_uma_hybrid_rpmd_cavity.py -x", depends-on = ["install-ml"] }
 
 # Full ML stack for CACE/MACE/AIMNet2 integration tests and parity runs.
 # Includes cace (LES-BEC water model) and fetch/test tasks for real cavity validation.
@@ -205,21 +222,36 @@ pip = "*"
 pytorch = ">=2.2"
 ase = "*"
 
-[feature.ml-full.pypi-dependencies]
-openmmml = { path = "openmm-ml", editable = true }
-fairchem-core = "*"
-mace-torch = "*"
-cace = "*"
+# fairchem-core and mace-torch conflict on e3nn; install via install-ml-full task.
 
 [feature.ml-full.tasks]
-install-ml-full = "pip install -e openmm-ml && pip install fairchem-core mace-torch cace || true"
+init-submodules = "bash scripts/init_submodules.sh openmm-ml"
+install-ml-full = "bash scripts/init_submodules.sh openmm-ml && pip install -e third_party/openmm-ml && pip install fairchem-core mace-torch cace || true"
 # Fetch the LES-BEC water model submodule and export the checkpoint path.
 # Usage: pixi run -e ml-full fetch-les-bec
-fetch-les-bec = { cmd = "git submodule update --init LES-BEC && export OPENMMML_LES_BEC_WATER_MODEL=$(pwd)/LES-BEC/water/fit/fit_version_4/best_model.pth && echo \"Set OPENMMML_LES_BEC_WATER_MODEL=$OPENMMML_LES_BEC_WATER_MODEL\"" }
+fetch-les-bec = { cmd = "git submodule update --init third_party/LES-BEC && export OPENMMML_LES_BEC_WATER_MODEL=$(pwd)/third_party/LES-BEC/water/fit/fit_version_4/best_model.pth && echo \"Set OPENMMML_LES_BEC_WATER_MODEL=$OPENMMML_LES_BEC_WATER_MODEL\"" }
 # Run real CACE+cavity trajectory tests (requires LES-BEC checkpoint via fetch-les-bec).
 test-ml-cavity-real = { cmd = "python -m pytest -v tests/cavity_mlip/test_cace_cavity_trajectory.py", depends-on = ["fetch-les-bec"] }
 # Full ML test suite (unit + RPMD + real CACE trajectory).
-test-ml-full = "python -m pytest -q openmm-ml/test/TestCavityMLIP.py tests/rpmd/test_rpmd_cavity_integration.py tests/cavity_mlip/"
+test-ml-full = { cmd = "python -m pytest -q third_party/openmm-ml/test/TestCavityMLIP.py tests/rpmd/test_rpmd_cavity_integration.py tests/cavity_mlip/", depends-on = ["install-ml-full"] }
+
+[feature.ff-classical.dependencies]
+pip = "*"
+
+[feature.ff-classical.tasks]
+init-submodules = "bash scripts/init_submodules.sh third_party/openmmforcefields"
+install-ff-classical = "bash scripts/install_ff_classical.sh"
+
+[feature.ff-ml-dipole.dependencies]
+python = ">=3.11,<3.14"
+pip = "*"
+pytorch = ">=2.2"
+
+[feature.ff-ml-dipole.tasks]
+init-submodules = "bash scripts/init_submodules.sh third_party/openmm-ml third_party/cace third_party/aimnet2 third_party/mace third_party/LES-BEC"
+install-ff-ml = "bash scripts/install_ff_ml_dipole.sh"
+fetch-mace-polar = "bash scripts/fetch_mace_polar_model.sh"
+test-ff-ml = { cmd = "python -m pytest -v wrappers/python/tests/TestCavityMDForceFields.py tests/cavity_mlip/ -m ff_ml", depends-on = ["install-ff-ml"] }
 
 [feature.docs.dependencies]
 sphinx = "*"
@@ -229,8 +261,10 @@ doxygen = "*"
 docs = "echo 'Run sphinx from build/docs-source after configuring with -DOPENMM_GENERATE_API_DOCS=ON'"
 
 [environments]
-default = { features = [] }
-test = { features = ["test"] }
-ml = { features = ["ml", "test"] }
-ml-full = { features = ["ml-full", "test"] }
-docs = { features = ["docs"] }
+default = { features = [], solve-group = "core" }
+test = { features = ["test"], solve-group = "core" }
+ml = { features = ["ml", "test"], solve-group = "ml" }
+ml-full = { features = ["ml-full", "ml", "test"], solve-group = "ml" }
+ff-classical = { features = ["ff-classical", "test"], solve-group = "core" }
+ff-ml-dipole = { features = ["ff-ml-dipole", "ml", "test"], solve-group = "ml" }
+docs = { features = ["docs"], solve-group = "docs" }

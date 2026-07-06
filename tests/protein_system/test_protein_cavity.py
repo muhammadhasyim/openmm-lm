@@ -3,11 +3,25 @@
 Unit tests for the protein cavity simulation scaffold.
 """
 
+import importlib.util
 from pathlib import Path
 
-import sys
-
 import numpy as np
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PROTEIN_EXAMPLE = REPO_ROOT / "examples" / "cavity" / "protein_system" / "run_simulation.py"
+
+pytest.importorskip("pdbfixer")
+
+
+def _load_protein_sim():
+    spec = importlib.util.spec_from_file_location("protein_run_simulation", PROTEIN_EXAMPLE)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load {PROTEIN_EXAMPLE}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_minimal_ala_pdb(tmp_path: Path) -> Path:
@@ -28,8 +42,7 @@ def _write_minimal_ala_pdb(tmp_path: Path) -> Path:
 
 
 def test_prepare_protein_system_minimal(tmp_path):
-    sys.path.append(str(Path(__file__).resolve().parent))
-    import run_simulation as protein_sim
+    protein_sim = _load_protein_sim()
 
     pdb_path = _write_minimal_ala_pdb(tmp_path)
     system, topology, positions, charges, real_indices = protein_sim.prepare_protein_system(

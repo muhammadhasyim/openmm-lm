@@ -20,6 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Test the PR branch as pushed, not GitHub's merge ref. The merge ref
+          # keeps deprecated root-level submodule gitlinks from cavity-md while
+          # also adding third_party/ copies, which breaks check_deprecated_paths.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Check deprecated submodule paths
@@ -61,6 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Check deprecated submodule paths
@@ -90,6 +95,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           submodules: recursive
 
       - name: Check deprecated submodule paths

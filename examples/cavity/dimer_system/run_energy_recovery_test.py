@@ -1,11 +1,22 @@
 #!/usr/bin/env python3
 """Instant coupling switch energy-recovery test for mKA bulk glass.
 
-Protocol (nonthermal-aging style):
-  - NVT at T=100 K with lambda=0 until t_switch
-  - Instant lambda jump at t_switch (displaceToEquilibrium via CavityParticleDisplacer)
-  - VariableVerletIntegrator with ramped error tolerance around the switch
-  - Track harmonic bond and nonbonded energies vs pre-switch baseline
+Reproduces the non-thermal-aging protocol of Hasyim, Damiani & Hoffmann,
+"Non-Thermal Aging of Supercooled Liquids in Optical Cavities" (arXiv:2603.15693),
+as implemented in cavHOOMD-blue:
+
+  - NVT at T=100 K, molecules on a Bussi-Parrinello bath (tau_b = 1 ps)
+  - Cavity photon on a Langevin bath (tau_c = 1 ps) so the pumped vibrational
+    energy has a dissipation channel and reaches a bounded steady state instead
+    of drifting without bound (bath temperature held fixed to prevent heating).
+  - lambda = 0 until t_switch, then an instant jump (displaceToEquilibrium via
+    CavityParticleDisplacer).
+  - VariableVerletIntegrator with the paper's Eq. 3.16 adaptive error tolerance
+    (eps* = 5.0, f = 1e-3, tau* = 50 ps): relaxed before the switch, reset strict
+    at the switch, then ramped back up.
+  - Track harmonic bond and nonbonded energies vs the pre-switch baseline:
+    harmonic (fast modes) is pumped to a bounded steady state; nonbonded
+    (structural) recovers to its pre-switch baseline.
 """
 
 from __future__ import annotations
@@ -23,10 +34,21 @@ if str(HERE) not in sys.path:
 
 from openmm import openmm, unit
 
+from openmm.cavitymd.adaptive import (
+    DT_MAX_PS,
+    EPS_STAR_NM,
+    epsilon_tolerance,
+)
+from openmm.cavitymd.thermostats import DualThermostat
+
 import run_simulation as rs
 
 GROUP_BONDS = 1
 GROUP_NONBONDED = 2
+
+# Paper Methods (arXiv:2603.15693): tau_b = tau_c = 1.0 ps. cavHOOMD uses
+# gamma = 1/tau (velocity relaxation time), so tau_c = 1 ps -> gamma_c = 1.0 ps^-1.
+DEFAULT_CAVITY_FRICTION_PS_INV = 1.0
 
 
 def assign_energy_groups(system: openmm.System) -> None:
@@ -46,14 +68,6 @@ def group_energy(context: openmm.Context, group: int) -> float:
     return state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
 
 
-def adaptive_epsilon(sim_time_ps: float, switch_time_ps: float) -> float:
-    eps_min, eps_max, tau, pre_ramp = 1e-5, 1.0, 50.0, 1.0
-    if sim_time_ps < switch_time_ps - pre_ramp:
-        return eps_max
-    t_since = max(0.0, sim_time_ps - switch_time_ps)
-    return eps_min + (eps_max - eps_min) * (1.0 - np.exp(-t_since / tau))
-
-
 def run_energy_recovery(
     *,
     num_molecules: int = 250,
@@ -61,7 +75,9 @@ def run_energy_recovery(
     switch_time_ps: float = 200.0,
     total_time_ps: float = 2500.0,
     temperature_K: float = 100.0,
-    dt_ps: float = 0.001,
+    dt_ps: float = DT_MAX_PS,
+    bussi_tau_ps: float = 1.0,
+    cavity_friction_ps_inv: float = DEFAULT_CAVITY_FRICTION_PS_INV,
     seed: int = 42,
     sample_interval_ps: float = 10.0,
     output_npz: str | None = None,
@@ -73,13 +89,19 @@ def run_energy_recovery(
     print("=" * 70)
     print("mKA energy recovery test (instant coupling switch)")
     print("=" * 70)
-    print(f"  N dimers     : {num_molecules}")
-    print(f"  Box          : {box_size_nm:.4f} nm (constant density)")
-    print(f"  T            : {temperature_K} K")
-    print(f"  lambda       : {lambda_coupling} (g = {lambda_coupling * np.sqrt(num_molecules):.4f})")
-    print(f"  Switch time  : {switch_time_ps} ps")
-    print(f"  Total time   : {total_time_ps} ps")
-    print(f"  dt cap       : {dt_ps} ps (adaptive VariableVerlet)")
+    print(f"  N dimers       : {num_molecules}")
+    print(f"  Box            : {box_size_nm:.4f} nm (constant density)")
+    print(f"  T              : {temperature_K} K")
+    print(f"  lambda         : {lambda_coupling} (g = {lambda_coupling * np.sqrt(num_molecules):.4f})")
+    print(f"  Switch time    : {switch_time_ps} ps")
+    print(f"  Total time     : {total_time_ps} ps")
+    print(f"  dt cap         : {dt_ps} ps (adaptive VariableVerlet, eps*={EPS_STAR_NM})")
+    print(f"  Molecular bath : Bussi, tau_b = {bussi_tau_ps} ps")
+    if cavity_friction_ps_inv > 0.0:
+        print(f"  Cavity bath    : Langevin, gamma_c = {cavity_friction_ps_inv} ps^-1 "
+              f"(tau_c = {1.0 / cavity_friction_ps_inv:.3g} ps)")
+    else:
+        print(f"  Cavity bath    : NONE (photon is NVE) -- expect runaway pumping")
 
     result = rs.create_diamer_system_from_forcefield(
         num_molecules=num_molecules,
@@ -104,13 +126,13 @@ def run_energy_recovery(
     displacer.setSwitchOnStep(switch_step)
     system.addForce(displacer)
 
-    bussi = openmm.BussiThermostat(temperature_K, 1.0)
+    bussi = openmm.BussiThermostat(temperature_K, bussi_tau_ps)
     bussi.setApplyToAllParticles(False)
     for i in range(num_molecular):
         bussi.addParticle(i)
     system.addForce(bussi)
 
-    integrator = openmm.VariableVerletIntegrator(1.0)
+    integrator = openmm.VariableVerletIntegrator(EPS_STAR_NM)
     integrator.setMaximumStepSize(dt_ps * unit.picosecond)
 
     try:
@@ -124,6 +146,19 @@ def run_energy_recovery(
     context = openmm.Context(system, integrator, platform)
     context.setPositions(positions)
     context.setVelocitiesToTemperature(temperature_K * unit.kelvin, seed)
+
+    # Langevin bath on the cavity photon (Caldeira-Leggett cavity loss). Applied
+    # as a per-step Ornstein-Uhlenbeck velocity update, operator-split with the
+    # Verlet propagation of the deterministic cavity force. This is the missing
+    # dissipation channel: without it the resonant photon pumps the O-O stretch
+    # without bound; with it the fast-mode energy saturates to a steady state.
+    cavity_thermostat = DualThermostat(
+        context,
+        system,
+        cavity_particle_index=cavity_index,
+        cavity_friction_ps_inv=cavity_friction_ps_inv,
+        cavity_temperature_K=temperature_K,
+    )
 
     print(f"  Platform     : {platform_name}")
     print("\n--- Energy minimization ---")
@@ -145,9 +180,11 @@ def run_energy_recovery(
         if sim_time_ps >= total_time_ps - 1e-12:
             break
 
-        integrator.setErrorTolerance(adaptive_epsilon(sim_time_ps, switch_time_ps))
+        integrator.setErrorTolerance(epsilon_tolerance(sim_time_ps, switch_time_ps))
         integrator.step(1)
         dt_step = integrator.getStepSize().value_in_unit(unit.picosecond)
+        # Cavity Langevin bath (no-op when friction == 0).
+        cavity_thermostat.apply_cavity_thermostat_step(dt_step)
         sim_time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
 
         if sim_time_ps + 1e-12 >= next_sample_ps:
@@ -196,6 +233,18 @@ def run_energy_recovery(
     bond_z = bond_delta / pre_bond_std if pre_bond_std > 0 else float("nan")
     nb_z = nb_delta / pre_nb_std if pre_nb_std > 0 else float("nan")
 
+    # Bounded-steady-state check: slope of the harmonic energy over the last
+    # 500 ps. Non-thermal aging pumps fast modes to a *bounded* plateau, so a
+    # converged run has a late-time slope consistent with zero. The pre-fix
+    # (no cavity bath) run instead shows a clear positive slope (runaway).
+    late = times_arr >= (total_time_ps - 500.0)
+    if np.count_nonzero(late) >= 3:
+        bond_slope = float(np.polyfit(times_arr[late], bond_arr[late], 1)[0])
+    else:
+        bond_slope = float("nan")
+    # Treat |slope| < ~1 kJ/mol per 100 ps as effectively stationary.
+    bounded_bond = abs(bond_slope) < 0.01 if np.isfinite(bond_slope) else False
+
     print("\n" + "=" * 70)
     print("Energy recovery analysis")
     print("=" * 70)
@@ -211,12 +260,12 @@ def run_energy_recovery(
     print(f"  Delta (post - pre):")
     print(f"    Harmonic bonds : {bond_delta:+10.2f} kJ/mol  (z = {bond_z:+.2f})")
     print(f"    Nonbonded      : {nb_delta:+10.2f} kJ/mol  (z = {nb_z:+.2f})")
+    print(f"  Late-time harmonic slope (last 500 ps): {bond_slope*100:+.3f} kJ/mol per 100 ps")
 
-    recovered_bond = abs(bond_z) < 2.0 if np.isfinite(bond_z) else False
     recovered_nb = abs(nb_z) < 2.0 if np.isfinite(nb_z) else False
-    print(f"\n  Recovered to pre-switch equilibrium (|z| < 2)?")
-    print(f"    Harmonic bonds : {'YES' if recovered_bond else 'NO'}")
-    print(f"    Nonbonded      : {'YES' if recovered_nb else 'NO'}")
+    print(f"\n  Non-thermal-aging criteria:")
+    print(f"    Harmonic (fast modes) BOUNDED steady state : {'YES' if bounded_bond else 'NO'}")
+    print(f"    Nonbonded (structural) recovered to baseline: {'YES' if recovered_nb else 'NO'}")
     print(f"  Wall time: {elapsed/60:.1f} min")
 
     summary = {
@@ -232,8 +281,13 @@ def run_energy_recovery(
         "nb_delta": nb_delta,
         "bond_z": bond_z,
         "nb_z": nb_z,
-        "recovered_bond": recovered_bond,
+        "bond_late_slope_kj_per_ps": bond_slope,
+        "bounded_bond": bounded_bond,
         "recovered_nb": recovered_nb,
+        "cavity_friction_ps_inv": cavity_friction_ps_inv,
+        "bussi_tau_ps": bussi_tau_ps,
+        "lambda_coupling": lambda_coupling,
+        "switch_time_ps": switch_time_ps,
         "platform": platform_name,
         "elapsed_s": elapsed,
     }
@@ -255,13 +309,24 @@ def run_energy_recovery(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument("--dimers", type=int, default=250)
     parser.add_argument("--lambda", type=float, default=0.005, dest="lambda_coupling")
     parser.add_argument("--switch-time", type=float, default=200.0)
     parser.add_argument("--total-time", type=float, default=2500.0)
     parser.add_argument("--temp", type=float, default=100.0)
-    parser.add_argument("--dt", type=float, default=0.001)
+    parser.add_argument("--dt", type=float, default=DT_MAX_PS,
+                        help=f"Adaptive dt cap in ps (default: {DT_MAX_PS} = paper ~1.5 fs)")
+    parser.add_argument("--bussi-tau", type=float, default=1.0,
+                        help="Molecular Bussi thermostat time constant in ps (default: 1.0, paper)")
+    parser.add_argument("--cavity-friction", type=float,
+                        default=DEFAULT_CAVITY_FRICTION_PS_INV,
+                        help="Cavity-photon Langevin friction gamma_c in ps^-1 "
+                             f"(default: {DEFAULT_CAVITY_FRICTION_PS_INV} = 1/tau_c with tau_c=1 ps, paper). "
+                             "Set 0 to disable the cavity bath (reproduces the runaway bug).")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sample-interval", type=float, default=10.0)
     parser.add_argument("--output", type=str, default=None)
@@ -274,6 +339,8 @@ def main() -> None:
         total_time_ps=args.total_time,
         temperature_K=args.temp,
         dt_ps=args.dt,
+        bussi_tau_ps=args.bussi_tau,
+        cavity_friction_ps_inv=args.cavity_friction,
         seed=args.seed,
         sample_interval_ps=args.sample_interval,
         output_npz=args.output,

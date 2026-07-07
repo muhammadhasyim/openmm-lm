@@ -38,7 +38,11 @@ CAVITY_FREQ_CM = 1560.0       # resonant with A2 (O-O) stretch
 DT_PS = 0.001                 # 1 fs
 SWITCH_TIME_PS = 1500.0       # coupling activates at t0 = 1500 ps
 PRODUCTION_PS = 3000.0        # total: 1500 ps pre-switch (no cavity) + 1500 ps post-switch (cavity on)
-BUSSI_TAU_PS = 1.0            # Bussi thermostat time constant
+BUSSI_TAU_PS = 1.0            # Bussi (molecular) thermostat time constant tau_b
+# Cavity-photon Langevin friction gamma_c = 1/tau_c with tau_c = 1 ps
+# (arXiv:2603.15693 Methods). Provides the cavity-loss dissipation channel so
+# pumped vibrational energy reaches a bounded steady state.
+CAVITY_FRICTION_PS_INV = 1.0
 FRACTION_OO = 0.8             # 4:1 A2:B2 mixture
 DENSITY_BOHR = N_REF / L_REF_BOHR**3   # 0.00390625 molecules/Bohr^3
 

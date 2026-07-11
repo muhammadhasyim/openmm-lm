@@ -41,7 +41,7 @@ pixi build
 # Run Python wrapper tests
 pixi run -e test test-py
 
-# Run C++ tests (CTest via devtools/run-ctest.py)
+# Run C++ tests (CTest via scripts/run_cpp_tests.sh)
 pixi run -e test test-cpp
 
 # ML stack smoke test

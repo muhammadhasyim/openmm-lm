@@ -10,17 +10,44 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def _read_run_params(npz_path: Path, switch_time_ps: float | None) -> dict:
+    """Load switch/equil timing from NPZ metadata when available."""
+    data = np.load(npz_path, allow_pickle=True)
+    meta = data["metadata"].item() if "metadata" in data else {}
+    absolute_switch = float(
+        meta.get("absolute_switch_ps", meta.get("switch_time_ps", switch_time_ps or 200.0))
+    )
+    equil = float(meta.get("equil_time_ps", 0.0))
+    lam = float(meta.get("lambda_coupling", 0.005))
+    return {
+        "data": data,
+        "absolute_switch_ps": absolute_switch,
+        "equil_time_ps": equil,
+        "lambda_coupling": lam,
+        "baseline_lo_ps": absolute_switch - 50.0,
+        "baseline_hi_ps": absolute_switch,
+    }
+
+
 def plot_energy_recovery(
     npz_path: Path,
     output_png: Path,
-    switch_time_ps: float = 200.0,
-    baseline_lo_ps: float = 150.0,
-    baseline_hi_ps: float = 200.0,
+    switch_time_ps: float | None = None,
+    baseline_lo_ps: float | None = None,
+    baseline_hi_ps: float | None = None,
 ) -> Path:
-    data = np.load(npz_path, allow_pickle=True)
+    params = _read_run_params(npz_path, switch_time_ps)
+    data = params["data"]
     t = data["time_ps"]
     bond = data["bond_energy_kj_mol"]
     nb = data["nonbonded_energy_kj_mol"]
+    absolute_switch = params["absolute_switch_ps"]
+    equil = params["equil_time_ps"]
+    lam = params["lambda_coupling"]
+    if baseline_lo_ps is None:
+        baseline_lo_ps = params["baseline_lo_ps"]
+    if baseline_hi_ps is None:
+        baseline_hi_ps = params["baseline_hi_ps"]
 
     pre = (t >= baseline_lo_ps) & (t < baseline_hi_ps)
     pre_bond_mean = bond[pre].mean()
@@ -29,14 +56,21 @@ def plot_energy_recovery(
     pre_nb_std = nb[pre].std()
 
     fig, (ax_bond, ax_nb) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-    fig.suptitle(
-        "mKA energy tracking: instant coupling switch at 200 ps (λ = 0.005)",
-        fontsize=13,
-        fontweight="bold",
-    )
+    if equil > 0:
+        title = (
+            f"mKA energy tracking: {equil/1000:.1f} ns equil, "
+            f"switch at {absolute_switch:.0f} ps (λ = {lam})"
+        )
+    else:
+        title = f"mKA energy tracking: instant coupling switch at {absolute_switch:.0f} ps (λ = {lam})"
+    fig.suptitle(title, fontsize=13, fontweight="bold")
 
     ax_bond.plot(t, bond, color="#d62728", linewidth=1.2, label="Harmonic bonds")
-    ax_bond.axvline(switch_time_ps, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+    if equil > 0:
+        ax_bond.axvline(equil, color="#888888", linestyle="-.", linewidth=0.9, alpha=0.7,
+                        label=f"Equil end ({equil/1000:.1f} ns)")
+    ax_bond.axvline(absolute_switch, color="black", linestyle="--", linewidth=1.0, alpha=0.7,
+                    label="Coupling switch")
     ax_bond.axhline(pre_bond_mean, color="#d62728", linestyle=":", alpha=0.8)
     ax_bond.fill_between(
         t,
@@ -51,7 +85,9 @@ def plot_energy_recovery(
     ax_bond.grid(True, alpha=0.25)
 
     ax_nb.plot(t, nb, color="#1f77b4", linewidth=1.2, label="Nonbonded (LJ + Coulomb)")
-    ax_nb.axvline(switch_time_ps, color="black", linestyle="--", linewidth=1.0, alpha=0.7,
+    if equil > 0:
+        ax_nb.axvline(equil, color="#888888", linestyle="-.", linewidth=0.9, alpha=0.7)
+    ax_nb.axvline(absolute_switch, color="black", linestyle="--", linewidth=1.0, alpha=0.7,
                   label="Coupling switch")
     ax_nb.axhline(pre_nb_mean, color="#1f77b4", linestyle=":", alpha=0.8)
     ax_nb.fill_between(
@@ -67,14 +103,16 @@ def plot_energy_recovery(
     ax_nb.legend(loc="lower left", fontsize=9)
     ax_nb.grid(True, alpha=0.25)
 
-    fig.text(
-        0.5,
-        0.01,
-        "250 dimers, T = 100 K, λ = 0 before switch → 0.005 at 200 ps, adaptive VariableVerlet, total 2500 ps",
-        ha="center",
-        fontsize=9,
-        color="#444444",
+    footer = (
+        f"250 dimers, T = 100 K, λ = 0 → {lam} at {absolute_switch:.0f} ps, "
+        f"adaptive VariableVerlet"
     )
+    if equil > 0:
+        footer = (
+            f"250 dimers, T = 100 K, {equil/1000:.1f} ns NVT equil (λ=0), "
+            f"then λ → {lam} at {absolute_switch:.0f} ps"
+        )
+    fig.text(0.5, 0.01, footer, ha="center", fontsize=9, color="#444444")
     fig.tight_layout(rect=[0, 0.03, 1, 0.96])
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
@@ -94,13 +132,21 @@ def plot_comparison(
     nobath_path: Path,
     bath_path: Path,
     output_png: Path,
-    switch_time_ps: float = 200.0,
-    baseline_lo_ps: float = 150.0,
-    baseline_hi_ps: float = 200.0,
+    switch_time_ps: float | None = None,
+    baseline_lo_ps: float | None = None,
+    baseline_hi_ps: float | None = None,
 ) -> Path:
     """Overlay no-bath (buggy) vs cavity-bath (fixed) runs for both energies."""
+    p1 = _read_run_params(bath_path, switch_time_ps)
     d0 = np.load(nobath_path, allow_pickle=True)
-    d1 = np.load(bath_path, allow_pickle=True)
+    d1 = p1["data"]
+    absolute_switch = p1["absolute_switch_ps"]
+    equil = p1["equil_time_ps"]
+    lam = p1["lambda_coupling"]
+    if baseline_lo_ps is None:
+        baseline_lo_ps = p1["baseline_lo_ps"]
+    if baseline_hi_ps is None:
+        baseline_hi_ps = p1["baseline_hi_ps"]
     t0, bond0, nb0 = d0["time_ps"], d0["bond_energy_kj_mol"], d0["nonbonded_energy_kj_mol"]
     t1, bond1, nb1 = d1["time_ps"], d1["bond_energy_kj_mol"], d1["nonbonded_energy_kj_mol"]
 
@@ -110,7 +156,8 @@ def plot_comparison(
 
     fig, (ax_bond, ax_nb) = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True)
     fig.suptitle(
-        "mKA cavity switch (λ = 0.005 at 200 ps): no cavity bath vs 1 ps Langevin bath",
+        f"mKA cavity switch (λ = {lam} at {absolute_switch:.0f} ps): "
+        "no cavity bath vs 1 ps Langevin bath",
         fontsize=13,
         fontweight="bold",
     )
@@ -121,7 +168,9 @@ def plot_comparison(
                  label=f"No cavity bath (NVE photon): late slope {s0:+.2f} kJ/mol per 100 ps")
     ax_bond.plot(t1, bond1, color="#d62728", lw=1.1,
                  label=f"Cavity Langevin bath (γ=1 ps⁻¹): late slope {s1:+.2f} kJ/mol per 100 ps")
-    ax_bond.axvline(switch_time_ps, color="black", ls="--", lw=1.0, alpha=0.7)
+    ax_bond.axvline(absolute_switch, color="black", ls="--", lw=1.0, alpha=0.7)
+    if equil > 0:
+        ax_bond.axvline(equil, color="#888888", ls="-.", lw=0.9, alpha=0.7)
     ax_bond.axhline(pre_bond, color="gray", ls=":", alpha=0.8, label="Pre-switch baseline")
     ax_bond.set_ylabel("Harmonic bond energy (kJ/mol)\n(fast / vibrational modes)")
     ax_bond.legend(loc="upper left", fontsize=8.5)
@@ -129,7 +178,9 @@ def plot_comparison(
 
     ax_nb.plot(t0, nb0, color="#9467bd", lw=1.1, label="No cavity bath (NVE photon)")
     ax_nb.plot(t1, nb1, color="#1f77b4", lw=1.1, label="Cavity Langevin bath (γ=1 ps⁻¹)")
-    ax_nb.axvline(switch_time_ps, color="black", ls="--", lw=1.0, alpha=0.7, label="Coupling switch")
+    ax_nb.axvline(absolute_switch, color="black", ls="--", lw=1.0, alpha=0.7, label="Coupling switch")
+    if equil > 0:
+        ax_nb.axvline(equil, color="#888888", ls="-.", lw=0.9, alpha=0.7)
     ax_nb.axhline(pre_nb, color="gray", ls=":", alpha=0.8, label="Pre-switch baseline")
     ax_nb.set_xlabel("Simulation time (ps)")
     ax_nb.set_ylabel("Nonbonded energy (kJ/mol)\n(structural modes)")
@@ -170,7 +221,8 @@ def main() -> None:
         type=Path,
         default=here / "energy_recovery_lambda0.005_t200.png",
     )
-    parser.add_argument("--switch-time", type=float, default=200.0)
+    parser.add_argument("--switch-time", type=float, default=None,
+                        help="Override switch time (ps); default: read from NPZ metadata")
     parser.add_argument("--compare", nargs=2, metavar=("NOBATH_NPZ", "BATH_NPZ"),
                         type=Path, default=None,
                         help="Overlay two runs (no-bath vs cavity-bath) into --output")

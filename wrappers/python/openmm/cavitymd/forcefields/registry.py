@@ -126,7 +126,7 @@ def _register_defaults(registry: ForceFieldRegistry) -> None:
     register_forcefield(
         registry,
         name="cace-les-bec",
-        cavity_backend=CavityBackend.ML_PYTHONFORCE,
+        cavity_backend=CavityBackend.ML_CUDA_BRIDGE,
         provides_dipole_jacobian=True,
         requires_topology=True,
         builder=_build_cace_les_bec,
@@ -146,7 +146,7 @@ def _register_defaults(registry: ForceFieldRegistry) -> None:
     register_forcefield(
         registry,
         name="aimnet2",
-        cavity_backend=CavityBackend.ML_PYTHONFORCE,
+        cavity_backend=CavityBackend.ML_CUDA_BRIDGE,
         provides_dipole_jacobian=True,
         requires_topology=True,
         builder=_build_aimnet2,

@@ -19,8 +19,8 @@ from pathlib import Path
 
 from config import (
     TEMPERATURE_K, CAVITY_FREQ_CM, DT_PS, SWITCH_TIME_PS, PRODUCTION_PS,
-    BUSSI_TAU_PS, FKT_KMAG, FKT_NUM_WAVEVECTORS, FKT_REF_INTERVAL_PS,
-    FKT_MAX_REFS, FKT_OUTPUT_PERIOD_PS, RUN_SIMULATION_SCRIPT,
+    BUSSI_TAU_PS, CAVITY_FRICTION_PS_INV, FKT_KMAG, FKT_NUM_WAVEVECTORS,
+    FKT_REF_INTERVAL_PS, FKT_MAX_REFS, FKT_OUTPUT_PERIOD_PS, RUN_SIMULATION_SCRIPT,
     CONFIGS_DIR, RESULTS_DIR,
     lambda_scaled, num_replicas,
 )
@@ -72,6 +72,7 @@ def run_single(n_molecules: int, replica_id: int, baseline: bool = False,
         cmd.append("--no-cavity")
     else:
         cmd.extend(["--switch-time", str(SWITCH_TIME_PS)])
+        cmd.extend(["--cavity-friction", str(CAVITY_FRICTION_PS_INV)])
 
     if extra_args:
         cmd.extend(extra_args)

@@ -38,7 +38,7 @@ using namespace OpenMM;
 using std::vector;
 
 CavityParticleDisplacerImpl::CavityParticleDisplacerImpl(const CavityParticleDisplacer& owner) : 
-        owner(owner), stepCount(0), hasTriggered(false), lastCoupling(0.0) {
+        owner(owner), hasTriggered(false), lastCoupling(0.0) {
 }
 
 void CavityParticleDisplacerImpl::initialize(ContextImpl& context) {
@@ -56,21 +56,17 @@ void CavityParticleDisplacerImpl::initialize(ContextImpl& context) {
 }
 
 void CavityParticleDisplacerImpl::updateContextState(ContextImpl& context, bool& forcesInvalid) {
-    // Check if we should trigger the displacement
+    // Use the canonical context step count so displacement fires in the same
+    // integrator step as CavityForce coupling turn-on (setCouplingOnStep).
     int switchStep = owner.getSwitchOnStep();
     double switchLambda = owner.getSwitchOnLambda();
-    
-    // Trigger displacement when:
-    // 1. We've reached the switch-on step
-    // 2. The coupling is non-zero
-    // 3. We haven't already triggered for this transition
-    if (stepCount == switchStep && switchLambda > 0.0 && !hasTriggered) {
+    long long step = context.getStepCount();
+
+    if (step == switchStep && switchLambda > 0.0 && !hasTriggered) {
         displaceToEquilibrium(context, switchLambda);
         hasTriggered = true;
         forcesInvalid = true;  // Forces need to be recalculated after displacement
     }
-    
-    stepCount++;
 }
 
 void CavityParticleDisplacerImpl::displaceToEquilibrium(ContextImpl& context, double lambdaCoupling) {

@@ -1,0 +1,14 @@
+# cav-hoomd numerical parity summary
+
+## Force parity (501 particles)
+force_comparison_raw_gsd.txt: max=7.541e-04, mean=5.507e-05, median=2.585e-06, >1e-5 count=42
+force_comparison_after_fix.txt: max=7.415e-06, mean=2.586e-06, median=2.514e-06, >1e-5 count=0
+
+## Energy recovery runs
+run                                             λ   t_sw   rec_nb       nb_Δ     bond_Δ   bond_z
+energy_recovery_lambda0.005_t200.npz        0.000      0     True      -28.4      +18.3     19.2
+energy_recovery_lambda0.005_t200_bath.npz   0.005    200    False     -109.5      +70.1     25.0
+energy_recovery_lambda0.098_t50.npz         0.098     50     True     -181.5      +32.0     17.6
+energy_recovery_lambda0.141_t50.npz         0.141     50     True     -214.4      +55.0     18.4
+energy_recovery_nobath_4000.npz             0.005    200     True      -19.8      +31.7     47.6
+energy_recovery_bath_4000.npz               0.005    200    False     -130.9      +81.1    110.3

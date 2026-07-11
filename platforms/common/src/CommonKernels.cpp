@@ -2078,6 +2078,8 @@ double CommonCalcGBSAOBCForceKernel::execute(ContextImpl& context, bool includeF
         else
             force1Kernel->addArg(numAtomBlocks*(numAtomBlocks+1)/2);
         force1Kernel->addArg(nb.getExclusionTiles());
+        if (!deviceIsCpu)
+            force1Kernel->addArg(cc.getAtomEnergyBuffer());
         program = cc.compileProgram(CommonKernelSources::gbsaObcReductions, defines);
         reduceBornSumKernel = program->createKernel("reduceBornSum");
         reduceBornSumKernel->addArg(1.0f);
@@ -2093,6 +2095,7 @@ double CommonCalcGBSAOBCForceKernel::execute(ContextImpl& context, bool includeF
         reduceBornForceKernel->addArg(params);
         reduceBornForceKernel->addArg(bornRadii);
         reduceBornForceKernel->addArg(obcChain);
+        reduceBornForceKernel->addArg(cc.getAtomEnergyBuffer());
     }
     force1Kernel->setArg(6, (int) includeEnergy);
     if (nb.getUseCutoff()) {
@@ -4931,11 +4934,10 @@ void CommonApplyCavityDisplacementKernel::execute(ContextImpl& context, double l
     // Compute dipole moment
     computeDipoleKernel->execute(cc.getNumAtoms());
     
-    // Displace cavity particle
-    // Per Hamiltonian H_EM = sum [ p^2/2 + (omega_c^2/2)(q + lambda*mu/omega_c)^2 ], the
-    // equilibrium is q_eq = -(lambda/omega_c)*d with NO photon mass (unit mass in a.u.).
-    // Fix: use -lambda/omegac instead of -lambda/(photonMass_au*omegac)
-    float factor = (float) (-lambdaCoupling / omegac);
+    // Displace cavity particle to q_eq = -(epsilon/K)*d = -lambda/(photonMass_au*omegac)*d
+    const float AMU_TO_AU = 1822.8885f;
+    float photonMass_au = (float)(photonMass * AMU_TO_AU);
+    float factor = (float)(-lambdaCoupling / (photonMass_au * omegac));
     displacementKernel->setArg(3, factor);
     displacementKernel->execute(1); // Only need to execute for one particle
 }

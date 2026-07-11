@@ -67,7 +67,6 @@ public:
 private:
     const CavityParticleDisplacer& owner;
     Kernel kernel;
-    int stepCount;
     bool hasTriggered;
     double lastCoupling;
 };

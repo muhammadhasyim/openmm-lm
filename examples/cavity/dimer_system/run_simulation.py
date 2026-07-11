@@ -14,8 +14,11 @@ The system uses:
 - Harmonic bonds for dimers
 - Lennard-Jones interactions
 - Coulomb interactions
-- Cavity coupling with Bussi thermostat for molecules
-- Langevin dynamics for the cavity photon
+- Cavity coupling with Bussi-Parrinello thermostat for molecules (tau_b)
+- Langevin bath for the cavity photon (gamma_c = 1/tau_c), providing the
+  Caldeira-Leggett cavity-loss dissipation channel (arXiv:2603.15693). This is
+  applied as a per-step Ornstein-Uhlenbeck velocity update on the photon,
+  operator-split with the Verlet propagation of the deterministic cavity force.
 
 F(k,t) and T=0: F(k,t) uses wrapped molecular positions (cav-hoomd parity). At nearly
 0 K the structure is effectively frozen, so F(k,t) stays close to its initial value.
@@ -767,7 +770,7 @@ def _topology_subset(topology, num_atoms):
 def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
              dt=0.001, equilibration_time_ps=100.0, production_time_ps=900.0,
              cavity_freq_cm=1560.0, disable_dipole_output=False,
-             box_size_nm=2.5, fraction_OO=0.8, friction=0.01, minimize=True,
+             box_size_nm=2.5, fraction_OO=0.8, cavity_friction_ps_inv=1.0, minimize=True,
              output_file=None, seed=42, report_interval_steps=1000,
              pdb_file=None, pdb_interval_steps=1000,
              enable_fkt=False, fkt_kmag=113.4, fkt_num_wavevectors=50,
@@ -1115,6 +1118,24 @@ def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
     # distribution: v ~ Normal(0, sqrt(kT/m)) per component (mass = 1 a.u.).
     context.setVelocitiesToTemperature(temperature_K * unit.kelvin)
 
+    # Cavity-photon Langevin bath (Caldeira-Leggett cavity loss), matching the
+    # cavHOOMD-blue / arXiv:2603.15693 protocol: molecules on Bussi, cavity on
+    # Langevin, bath temperature fixed. Without this dissipation channel the
+    # resonant photon pumps the O-O stretch without bound. Applied as a per-step
+    # Ornstein-Uhlenbeck velocity update, operator-split with Verlet.
+    cavity_thermostat = None
+    if cavity_available and not nve and cavity_friction_ps_inv > 0.0:
+        from openmm.cavitymd.thermostats import DualThermostat
+        cavity_thermostat = DualThermostat(
+            context,
+            system,
+            cavity_particle_index=cavity_index,
+            cavity_friction_ps_inv=cavity_friction_ps_inv,
+            cavity_temperature_K=temperature_K,
+        )
+        print(f"\n--- Cavity Langevin bath ---")
+        print(f"  gamma_c = {cavity_friction_ps_inv} ps^-1 (tau_c = {1.0/cavity_friction_ps_inv:.3g} ps)")
+
     # Calculate total steps
     total_steps = equilibration_steps + production_steps
     
@@ -1196,6 +1217,11 @@ def run_test(num_molecules=250, lambda_coupling=0.001, temperature_K=100.0,
                         dt_actual = integrator.getStepSize().value_in_unit(unit.picosecond)
                         print(f"  [RAMP] At switch: sim_time={sim_time_ps:.3f} ps, eps={eps_now:.2e} nm, dt={dt_actual:.6f} ps")
             integrator.step(1)
+            # Cavity Langevin bath: OU velocity update on the photon each step.
+            if cavity_thermostat is not None:
+                dt_this = (integrator.getStepSize().value_in_unit(unit.picosecond)
+                           if use_adaptive else dt)
+                cavity_thermostat.apply_cavity_thermostat_step(dt_this)
             step_counter += 1
             sim_time_ps = context.getState().getTime().value_in_unit(unit.picosecond) if use_adaptive else step_counter * dt
             if use_adaptive and sim_time_ps >= total_time_ps:
@@ -1459,8 +1485,10 @@ Examples:
     # Simulation control
     parser.add_argument('--temp', type=float, default=100.0,
                         help='Temperature in K (default: 100)')
-    parser.add_argument('--friction', type=float, default=0.01,
-                        help='Langevin friction in ps⁻¹ (default: 0.01)')
+    parser.add_argument('--cavity-friction', type=float, default=1.0, dest='cavity_friction',
+                        help='Cavity-photon Langevin friction gamma_c in ps⁻¹ '
+                             '(default: 1.0 = 1/tau_c with tau_c=1 ps, arXiv:2603.15693). '
+                             'Set 0 to run the photon as NVE (no cavity loss).')
     parser.add_argument('--no-minimize', action='store_true',
                         help='Skip energy minimization')
     parser.add_argument('--no-dipole', action='store_true', dest='no_dipole',
@@ -1538,7 +1566,7 @@ Examples:
             disable_dipole_output=args.no_dipole,
             box_size_nm=box_size_nm,
             fraction_OO=args.fraction_OO,
-            friction=args.friction,
+            cavity_friction_ps_inv=args.cavity_friction,
             minimize=not args.no_minimize,
             output_file=args.output,
             seed=args.seed,

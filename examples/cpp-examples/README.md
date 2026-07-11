@@ -50,10 +50,9 @@ Fortran).  In the `VisualStudio` subdirectory, there are Visual Studio
 make your own for the other examples or just substitute a different source file
 for HelloArgon.
 
-You must already have the OpenMM binaries installed to build the examples from
-source.  See the
-[user guide](https://docs.openmm.org/latest/userguide/application/01_getting_started.html#installing-openmm)
-for more information.  You may need to slightly edit the Makefile or NMakefile
+You must already have the OpenMM-LM binaries installed to build the examples from
+source. See [docs/BUILD_AND_REINSTALL.md](../../docs/BUILD_AND_REINSTALL.md)
+for installation instructions. You may need to slightly edit the Makefile or NMakefile
 to make  it run on your system, depending where you installed OpenMM and  the
 particular requirements of your compiler versions for mixed Fortran/C++
 programming.

@@ -1,14 +1,17 @@
 # mKA Cavity MD Tutorial
 
-Step-by-step notebook and validation scripts for cavity molecular dynamics with the modified Kob–Andersen (mKA) dimer model.
+Step-by-step scripts and validation for cavity molecular dynamics with the modified Kob–Andersen (mKA) dimer model.
 
 ## Contents
 
 | File | Purpose |
 |------|---------|
-| [`mka_cavity_md_tutorial.ipynb`](mka_cavity_md_tutorial.ipynb) | Interactive walkthrough (Sections 0–5) |
+| [`01_nve_single_dimer.py`](01_nve_single_dimer.py) | Tutorial 01 — NVE single dimer, IR peak, finite-q demo |
+| [`02_nvt_single_dimer.py`](02_nvt_single_dimer.py) | Tutorial 02 — Bussi NVT, kinetic T control, IR peak |
+| [`03_nvt_two_dimers.py`](03_nvt_two_dimers.py) | Tutorial 03 — two dimers + LJ/Coulomb, polariton LP/UP |
 | [`tutorial_common.py`](tutorial_common.py) | Shared system builders and analysis helpers |
-| [`run_tutorial_validation.py`](run_tutorial_validation.py) | Headless physics validation script |
+| [`run_tutorial_validation.py`](run_tutorial_validation.py) | Headless validation for all three tutorials |
+| [`mka_cavity_md_tutorial.ipynb`](mka_cavity_md_tutorial.ipynb) | Interactive walkthrough (Sections 0–5) |
 
 ## Prerequisites
 
@@ -19,51 +22,58 @@ pixi install
 pixi run smoke   # verify import
 ```
 
-For the notebook, use the test environment with Jupyter:
-
-```bash
-pixi run -e test jupyter lab examples/tutorial/mka_cavity_md_tutorial.ipynb
-```
-
-## Run validation (no notebook required)
+## Run tutorials (01 → 03)
 
 From the repository root:
 
 ```bash
-python examples/tutorial/run_tutorial_validation.py
-python examples/tutorial/run_tutorial_validation.py --steps 20000
-python examples/tutorial/run_tutorial_validation.py --platform CPU
+python examples/tutorial/01_nve_single_dimer.py --platform Reference
+python examples/tutorial/02_nvt_single_dimer.py --platform Reference
+python examples/tutorial/03_nvt_two_dimers.py --platform Reference
 ```
 
-By default the validation script uses **CUDA** (mixed precision) when available, otherwise **CPU**.
+Or validate all at once:
 
-This runs tutorial Section 2 (single A–A dimer + photon, NVT Langevin) and checks:
+```bash
+python examples/tutorial/run_tutorial_validation.py
+python examples/tutorial/run_tutorial_validation.py --quick
+```
 
-- Mean total kinetic temperature near the bath (100 K by default)
-- Dipole spectrum peak near the cavity frequency (1560 cm⁻¹)
+## Physics acceptance criteria
+
+| Tutorial | Checks |
+|----------|--------|
+| **01 NVE** | Single dominant IR peak near **1560 cm⁻¹**; finite-q shift suppresses photon displacement and potential-energy exchange vs `q = 0` |
+| **02 NVT** | Mean molecular **T_kin ≈ 100 K** (3N DOF); same **~1560 cm⁻¹** peak |
+| **03 Two dimers** | Resonant coupling shows **LP below** and **UP above** ω_c (λ = 0.03 by default for resolved splitting) |
+
+## Finite-q displacement demo (Tutorial 01)
+
+`CavityParticleDisplacer.displaceToEquilibrium()` sets `q_eq = -(λ/(m_ph·ω_c))·d_xy` before dynamics. With zero initial velocities:
+
+- **No shift** (`q = 0`): photon drifts from equilibrium and the potential energy oscillates (molecule–cavity energy exchange).
+- **With shift**: photon starts at equilibrium and stays there.
 
 ## Automated tests
 
 ```bash
-pixi run -e test test-py
+pixi run -e test python -m pytest -v tests/tutorial/test_mka_tutorial_physics.py
 ```
-
-The tutorial regression lives in [`tests/tutorial/test_mka_tutorial_physics.py`](../tests/tutorial/test_mka_tutorial_physics.py).
 
 ## Physics notes
 
-- **Finite-q displacement**: `displaceToEquilibrium()` sets `q_eq = -(λ/(m_ph·ω_c))·d_xy`, matching `CavityForce` with `K = m_ph·ω_c²`.
-- **NVT thermostat**: `LangevinMiddleIntegrator` (friction γ = 0.01 ps⁻¹) thermostats molecules and photon at T_bath. Section 1 remains NVE (Verlet).
-- **Temperature reporting**: Langevin thermostats each particle independently (3N molecular DOF, not 3N−3). The total system kinetic temperature is the primary bath metric; molecular and photon subsets can differ when cavity coupling exchanges energy.
-- **Dipole self-energy**: Always included in `CavityForce`; no toggle is required in Python setup code.
-- **Spectrum**: Direct FFT of the dipole trace; peak should be near ω_c = 1560 cm⁻¹ for λ = 0.01.
-- **Platform**: The notebook prefers CUDA; CPU/Reference is also supported.
+- **Finite-q displacement**: `displaceToEquilibrium()` matches `CavityForce` with `K = m_ph·ω_c²`.
+- **NVT thermostat (02/03)**: Bussi on molecular indices only; Verlet integrator.
+- **Temperature (02)**: molecular kinetic T from selected atoms with 3N translational DOF.
+- **Spectrum**: dipole ACF + DCT (same method as the external tutorial notebooks).
+- **Polaritons (03)**: increase λ or trajectory length if LP/UP are unresolved at λ = 0.01.
+- **Platform**: scripts default to CPU/Reference (whichever is available); CUDA works when built.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|----------------|
-| `AttributeError: setIncludeDipoleSelfEnergy` | Remove that call; DSE is always on |
-| Photon T >> bath T | Old `displaceToEquilibrium` bug; rebuild OpenMM from current branch |
-| Peak ~1000 cm⁻¹ instead of ~1560 cm⁻¹ (CPU, old builds) | Legacy Reference split-Verlet + Bussi bug; rebuild OpenMM |
-| Photon T far from T_bath with Langevin NVT | Increase production length or check friction γ |
+| `No registered Platform called "CPU"` | Use `--platform Reference` or rebuild with CPU platform |
+| Peak ~1540 instead of ~1560 | Short trajectory; increase `--steps` |
+| T_kin far from 100 K | Increase production length; check molecular-only T estimator |
+| No LP/UP in Tutorial 03 | Increase `--lambda-coupling` (e.g. 0.03) or `--steps` |

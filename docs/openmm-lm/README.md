@@ -1,7 +1,7 @@
 # OpenMM-LM architecture index
 
-This fork extends [upstream OpenMM](https://github.com/openmm/openmm) with cavity-coupled MD,
-RPMD/ML integration, and research workflows. Code lives in the standard upstream layout plus
+OpenMM-LM extends the OpenMM foundation with cavity-coupled MD,
+RPMD/ML integration, and research workflows. Code lives in the standard OpenMM layout plus
 `research/` for paper-scale campaigns.
 
 ## Where things live

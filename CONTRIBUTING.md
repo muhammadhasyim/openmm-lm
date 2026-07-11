@@ -1,22 +1,23 @@
-## How to Contribute to OpenMM Development
+## How to Contribute to OpenMM-LM
 
 We welcome anyone who wants to contribute to the project, whether by adding a feature,
 fixing a bug, or improving documentation. The process is quite simple.
 
-First, it is always best to begin by opening an issue on Github that describes the change you
+First, it is always best to begin by opening an issue on GitHub that describes the change you
 want to make. This gives everyone a chance to discuss it before you put in a lot of work.
 For bug fixes, we will confirm that the behavior is actually a bug and that the proposed fix
 is correct. For new features, we will decide whether the proposed feature is something we
 want and discuss possible designs for it.
 
 Once everyone is in agreement, the next step is to
-[create a pull request](https://help.github.com/en/articles/about-pull-requests) with the code changes.
+[create a pull request](https://help.github.com/en/articles/about-pull-requests) against
+[this repository](https://github.com/muhammadhasyim/openmm-lm) with the code changes.
 For larger features, feel free to create the pull request even before the implementation is
 finished so as to get early feedback on the code. When doing this, put the letters "WIP" at
 the start of the title of the pull request to indicate it is still a work in progress.
 
-For new features, consult the [New Feature Checklist](https://github.com/openmm/openmm/wiki/Checklist-for-Adding-a-New-Feature),
-which lists various items that need to be included before the feature can be merged (documentation,
+For new features, consult the [New Feature Checklist](https://github.com/openmm/openmm/wiki/Checklist-for-Adding-a-New-Feature)
+from upstream OpenMM, which lists various items that need to be included before the feature can be merged (documentation,
 tests, serialization, support for all APIs, etc.). Not every item is necessarily applicable to
 every new feature, but usually at least some of them are.
 
@@ -26,6 +27,8 @@ pull request. In addition, the full test suite is automatically run on every pul
 and rerun every time a change is added. Once the tests are passing and everyone is satisfied
 with the code, the pull request will be merged. Congratulations on a successful contribution!
 
-### Contributing to this fork
+### Areas specific to OpenMM-LM
 
-Changes that touch **UMA**, **`PythonForce` batching**, **RPMD**, or **`openmmml`** should include **targeted tests** (see `tests/rpmd/` and `tests/openmmml/`) and, when behavior changes, updates to [FIXES_SUMMARY.md](FIXES_SUMMARY.md) or the relevant doc under `docs/` / `plugins/rpmd/`. Open pull requests against **this** repository; upstream OpenMM may merge separately after review.
+Changes that touch **UMA**, **`PythonForce` batching**, **RPMD**, **`openmmml`**, or **cavity MD**
+should include **targeted tests** (see `tests/rpmd/` and `tests/openmmml/`) and, when behavior changes,
+updates to [FIXES_SUMMARY.md](FIXES_SUMMARY.md) or the relevant doc under `docs/` / `plugins/rpmd/`.

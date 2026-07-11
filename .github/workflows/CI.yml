@@ -559,8 +559,8 @@ jobs:
         shell: bash -l {0}
         run: ccache -s
 
-      - name: "Deploy docs (only on master, upstream repo only)"
-        if: ${{ github.ref == 'refs/heads/master' && github.event_name != 'schedule' && github.repository == 'openmm/openmm' }}
+      - name: "Deploy docs (only on main, this repo only)"
+        if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'schedule' && github.repository == 'muhammadhasyim/openmm-lm' }}
         uses: jakejarvis/s3-sync-action@master
         with:
           args: --acl public-read --follow-symlinks --delete

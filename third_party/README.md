@@ -1,6 +1,6 @@
 # Third-party dependencies
 
-Upstream [OpenMM](https://github.com/openmm/openmm) vendors C/C++ libraries under `libraries/` (compiled into the core build). This fork keeps **optional git submodules** here for reference tools, ML integration, and parity workflows.
+[OpenMM](https://github.com/openmm/openmm) vendors C/C++ libraries under `libraries/` (compiled into the core build). OpenMM-LM keeps **optional git submodules** here for reference tools, ML integration, and parity workflows.
 
 ## Submodules
 

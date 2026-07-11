@@ -135,8 +135,8 @@ def buildKeywordDictionary(major_version_num=MAJOR_VERSION_NUM,
     setupKeywords["author"]            = "Peter Eastman"
     setupKeywords["license"]           = \
     "Python Software Foundation License (BSD-like)"
-    setupKeywords["url"]               = "https://openmm.org"
-    setupKeywords["download_url"]      = "https://openmm.org"
+    setupKeywords["url"]               = "https://github.com/muhammadhasyim/openmm-lm"
+    setupKeywords["download_url"]      = "https://github.com/muhammadhasyim/openmm-lm"
     setupKeywords["packages"]          = [
                                           "simtk",
                                           "simtk.unit",

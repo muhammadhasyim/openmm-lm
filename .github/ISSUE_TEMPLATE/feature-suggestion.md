@@ -1,6 +1,6 @@
 ---
 name: Feature Suggestion
-about: Suggest an idea for improving OpenMM
+about: Suggest an idea for improving OpenMM-LM
 title: ''
 labels: ''
 assignees: ''

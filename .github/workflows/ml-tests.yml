@@ -1,4 +1,4 @@
-# Optional ML / openmmml checks (does not replace upstream OpenMM CI).
+# Optional ML / openmmml checks (supplement Pixi CI).
 # Runs static openmmml regression tests that need only Python + NumPy.
 
 name: ML auxiliary tests

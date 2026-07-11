@@ -2,7 +2,7 @@
 
 # Our Continuous Integration setup
 
-> **This fork’s primary build and CI path is Pixi.** See [`docs/BUILD_AND_REINSTALL.md`](../../docs/BUILD_AND_REINSTALL.md) and [`.github/workflows/pixi-ci.yml`](../../.github/workflows/pixi-ci.yml). The notes below describe the **legacy upstream-style** GitHub Actions workflow (`.github/workflows/CI.yml`), which now runs on a **nightly schedule** only.
+> **OpenMM-LM’s primary build and CI path is Pixi.** See [`docs/BUILD_AND_REINSTALL.md`](../../docs/BUILD_AND_REINSTALL.md) and [`.github/workflows/pixi-ci.yml`](../../.github/workflows/pixi-ci.yml). The notes below describe the **legacy upstream-style** GitHub Actions workflow (`.github/workflows/CI.yml`), which now runs on a **nightly schedule** only.
 
 OpenMM can be described as a C++ library with wrappers available in different programming languages (Python, C, Fortran). The heavy lifting is performed by the backend platforms, which can be based on CPU, CUDA and/or OpenCL (and possibly more in the future). All of this is supported for different operating systems and architectures. As a result, the CI setup can get a bit involved, but this document will try to clarify how it works and what we support.
 
@@ -31,11 +31,11 @@ The build matrix covers:
 Before I describe the pipelines, I will clarify some concepts and idiosyncrasies in GitHub Actions
 
 - The configuration file lives on `.github/workflows/CI.yml`. This directory can host more than one YML _workflow_, each describing a set of event that will trigger a run.
-- The workflow specifies a set of triggers (key `on`) and a list of `jobs` to run. We run the `CI` workflow for:
-  - Pushes to `master`
-  - Pull requests targetting `master`
+- The workflow specifies a set of triggers (key `on`) and a list of `jobs` to run. The legacy `CI` workflow runs for:
   - Nightlies
-- Currently, the workflow contains three jobs: `unix`, `windows`, `docs`. Each job can be run several times, depending on the configuration of `jobs.*.strategy.matrix`. All those jobs replicas will run in parallel and individually. The [`Actions > Summary`](https://github.com/openmm/openmm/actions/runs/451301350) overview can help visualize this.
+  - Manual dispatch
+- Day-to-day CI for OpenMM-LM is [`.github/workflows/pixi-ci.yml`](../../.github/workflows/pixi-ci.yml) on pushes and pull requests to `main`.
+- Currently, the workflow contains three jobs: `unix`, `windows`, `docs`. Each job can be run several times, depending on the configuration of `jobs.*.strategy.matrix`. All those jobs replicas will run in parallel and individually. See the [Actions tab](https://github.com/muhammadhasyim/openmm-lm/actions) for run summaries.
 - Within each job, you find `steps`. A step can either run a script on a `shell` or use a GitHub `action` to perform a task.
   - For example, cloning the repo or setting up Miniconda are both independent GitHub _actions_. You will recognize this because they contain the keyword `uses:`.
   - Running CMake is a shell step, which uses `run:`.

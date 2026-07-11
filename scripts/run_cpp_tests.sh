@@ -20,13 +20,16 @@ mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
 EXTRA=()
+# Default to CPU/Reference for CI speed and reliability. Opt in to CUDA with
+# OPENMM_CPP_TEST_CUDA=1 when a working CUDAToolkit is available.
 CUDA_LIB=OFF
-if [[ -n "$PREFIX" ]]; then
-  EXTRA+=("-DCMAKE_PREFIX_PATH=$PREFIX")
-  if [[ -x "$PREFIX/bin/nvcc" || -d "$PREFIX/targets/x86_64-linux" ]]; then
-    EXTRA+=("-DCUDAToolkit_ROOT=$PREFIX")
-    CUDA_LIB=ON
+if [[ "${OPENMM_CPP_TEST_CUDA:-0}" == "1" ]]; then
+  if [[ -n "$PREFIX" ]]; then
+    EXTRA+=("-DCMAKE_PREFIX_PATH=$PREFIX" "-DCUDAToolkit_ROOT=$PREFIX")
   fi
+  CUDA_LIB=ON
+elif [[ -n "$PREFIX" ]]; then
+  EXTRA+=("-DCMAKE_PREFIX_PATH=$PREFIX")
 fi
 
 # Reconfigure only when needed (missing cache or generator change).

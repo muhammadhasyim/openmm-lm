@@ -8,11 +8,9 @@
 
 This project adds light-matter interactions (particularly optical cavities), modules for nuclear quantum effects (ported from i-PI), and interfaces to state-of-the-art machine-learning interatomic potentials (e.g., FAIR Chemistry's UMA and AIMNet2).
 
-OpenMM-LM is developed and maintained in [this repository](https://github.com/muhammadhasyim/openmm-lm). It is not distributed through upstream OpenMM channels (conda-forge, openmm.org downloads, etc.).
-
 ### Installation
 
-OpenMM-LM is installed by building from source. The supported path is [Pixi](https://pixi.sh):
+Unlike the original OpenMM, the environment and installation is set up through [Pixi](https://pixi.sh) (not conda). It creates its own virtual environment inside the repo. Hence, using OpenMM-LM is installed by building from source:
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | sh   # if pixi not installed

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-TUTORIAL_DIR = Path(__file__).resolve().parents[2] / "examples" / "tutorial"
+TUTORIAL_DIR = Path(__file__).resolve().parents[2] / "examples" / "tutorials"
 sys.path.insert(0, str(TUTORIAL_DIR))
 
 openmm = pytest.importorskip("openmm")

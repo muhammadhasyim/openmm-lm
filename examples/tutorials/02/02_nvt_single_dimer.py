@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tutorial_common import OMEGA_C_CM1, run_nvt_bussi_single_dimer, select_platform
 

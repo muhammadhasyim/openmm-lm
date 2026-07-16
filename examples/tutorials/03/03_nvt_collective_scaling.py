@@ -3,12 +3,7 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-# Prefer the notebook-local workflow; this script is a thin headless counterpart.
-ROOT = Path(__file__).resolve().parents[2] / "openmm-lm"
-sys.path.insert(0, str(ROOT / "examples" / "tutorial"))
 
 import matplotlib
 

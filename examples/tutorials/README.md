@@ -4,14 +4,17 @@ Step-by-step scripts and validation for cavity molecular dynamics with the modif
 
 ## Contents
 
-| File | Purpose |
+| Path | Purpose |
 |------|---------|
-| [`01_nve_single_dimer.py`](01_nve_single_dimer.py) | Tutorial 01 — NVE single dimer, IR peak, finite-q demo |
-| [`02_nvt_single_dimer.py`](02_nvt_single_dimer.py) | Tutorial 02 — Bussi NVT, kinetic T control, IR peak |
-| [`03_nvt_two_dimers.py`](03_nvt_two_dimers.py) | Tutorial 03 — two dimers + LJ/Coulomb, polariton LP/UP |
+| [`01/01_nve_single_dimer.py`](01/01_nve_single_dimer.py) | Tutorial 01 — NVE single dimer, IR peak, finite-q demo |
+| [`02/02_nvt_single_dimer.py`](02/02_nvt_single_dimer.py) | Tutorial 02 — Bussi NVT, kinetic T control, IR peak |
+| [`03/03_nvt_two_dimers.py`](03/03_nvt_two_dimers.py) | Tutorial 03 — two dimers + LJ/Coulomb, polariton LP/UP |
+| [`03/03_nvt_collective_scaling.py`](03/03_nvt_collective_scaling.py) | Tutorial 03 — collective coupling at fixed λ√N |
 | [`tutorial_common.py`](tutorial_common.py) | Shared system builders and analysis helpers |
 | [`run_tutorial_validation.py`](run_tutorial_validation.py) | Headless validation for all three tutorials |
 | [`mka_cavity_md_tutorial.ipynb`](mka_cavity_md_tutorial.ipynb) | Interactive walkthrough (Sections 0–5) |
+
+Each numbered folder also contains the matching Jupyter notebook (and any generated figures).
 
 ## Prerequisites
 
@@ -27,16 +30,16 @@ pixi run smoke   # verify import
 From the repository root:
 
 ```bash
-python examples/tutorial/01_nve_single_dimer.py --platform Reference
-python examples/tutorial/02_nvt_single_dimer.py --platform Reference
-python examples/tutorial/03_nvt_two_dimers.py --platform Reference
+python examples/tutorials/01/01_nve_single_dimer.py --platform Reference
+python examples/tutorials/02/02_nvt_single_dimer.py --platform Reference
+python examples/tutorials/03/03_nvt_two_dimers.py --platform Reference
 ```
 
 Or validate all at once:
 
 ```bash
-python examples/tutorial/run_tutorial_validation.py
-python examples/tutorial/run_tutorial_validation.py --quick
+python examples/tutorials/run_tutorial_validation.py
+python examples/tutorials/run_tutorial_validation.py --quick
 ```
 
 ## Physics acceptance criteria

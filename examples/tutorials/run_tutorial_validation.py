@@ -3,8 +3,8 @@
 
 Run from repo root after building OpenMM:
 
-    python examples/tutorial/run_tutorial_validation.py
-    python examples/tutorial/run_tutorial_validation.py --quick
+    python examples/tutorials/run_tutorial_validation.py
+    python examples/tutorials/run_tutorial_validation.py --quick
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-TUTORIAL_DIR = Path(__file__).resolve().parent
+TUTORIALS_DIR = Path(__file__).resolve().parent
 
 
 def main() -> int:
@@ -32,18 +32,18 @@ def main() -> int:
     steps03 = 8000
 
     scripts = [
-        ("01_nve_single_dimer.py", ["--steps", str(steps01)]),
-        ("02_nvt_single_dimer.py", ["--steps", str(steps02)]),
-        ("03_nvt_two_dimers.py", ["--steps", str(steps03)]),
+        ("01/01_nve_single_dimer.py", ["--steps", str(steps01)]),
+        ("02/02_nvt_single_dimer.py", ["--steps", str(steps02)]),
+        ("03/03_nvt_two_dimers.py", ["--steps", str(steps03)]),
     ]
 
     platform_args = ["--platform", args.platform] if args.platform else []
     failures = 0
 
     for script, extra in scripts:
-        cmd = [sys.executable, str(TUTORIAL_DIR / script), *extra, *platform_args]
+        cmd = [sys.executable, str(TUTORIALS_DIR / script), *extra, *platform_args]
         print(f"\n{'=' * 60}\nRunning {script} ...")
-        result = subprocess.run(cmd, cwd=TUTORIAL_DIR, check=False)
+        result = subprocess.run(cmd, cwd=TUTORIALS_DIR / Path(script).parent, check=False)
         if result.returncode != 0:
             failures += 1
 

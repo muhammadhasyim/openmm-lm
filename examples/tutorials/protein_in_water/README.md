@@ -8,6 +8,7 @@ Official OpenMM workshop notebook for solvating a protein and running a short NV
 |------|---------|
 | [`protein_in_water.ipynb`](protein_in_water.ipynb) | Interactive tutorial (solvation, minimization, NVT/NPT, checkpoints, basic analysis) |
 | [`villin.pdb`](villin.pdb) | Villin headpiece structure used by the notebook |
+| [`images/`](images/) | Figures referenced by the notebook (`villin.png`, Colab/VMD screenshots) |
 
 ## What it covers
 
@@ -43,4 +44,9 @@ On Google Colab you can still use the upstream badge in the notebook; Colab inst
 
 Source: [openmm/openmm_workshops `section_1/protein_in_water.ipynb`](https://github.com/openmm/openmm_workshops/blob/main/section_1/protein_in_water.ipynb).
 
-Local edits are limited to setup notes for OpenMM-LM / Pixi and loading the bundled `villin.pdb` (with a download fallback for Colab).
+Local edits:
+
+- Setup notes for OpenMM-LM / Pixi
+- Load the bundled `villin.pdb` (with a download fallback for Colab)
+- Guard conda-forge `mamba install` cells so they only run on Colab
+- Vendor notebook figures under `images/`

@@ -1,8 +1,22 @@
-# mKA Cavity MD Tutorial
+# Tutorials
+
+This directory contains interactive tutorials for OpenMM-LM.
+
+## Protein in Water (upstream OpenMM workshop)
+
+Reusable protein-in-solvent workflow (solvation, NVT/NPT, checkpoints):
+
+| Path | Purpose |
+|------|---------|
+| [`protein_in_water/`](protein_in_water/) | Official OpenMM workshop notebook + `villin.pdb` |
+
+See [`protein_in_water/README.md`](protein_in_water/README.md).
+
+## mKA Cavity MD Tutorial
 
 Step-by-step scripts and validation for cavity molecular dynamics with the modified Kob–Andersen (mKA) dimer model.
 
-## Contents
+### Contents
 
 | Path | Purpose |
 |------|---------|

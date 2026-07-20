@@ -38,7 +38,7 @@ The `cavity/` directory contains **short, reproducible demos** for cavity-couple
 - `cavity/dimer_system/` — two-component dimer with cavity coupling
 - `cavity/water_system/` — flexible TIP4P-Ew water
 - `cavity/protein_system/` — protein in explicit solvent (`run_simulation.py`)
-- `tutorials/` — step-by-step mKA cavity MD notebooks with validation scripts
+- `tutorials/` — tutorials, including the OpenMM **Protein in Water** workshop notebook and step-by-step mKA cavity MD notebooks with validation scripts
 
 Paper-scale C2F protocol code and SLURM campaigns live under [`research/c2f/`](../research/c2f/)
 (not in `examples/`). A redirect stub remains at `cavity/c2f_protocol/README.md`.
